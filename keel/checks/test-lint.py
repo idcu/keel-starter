@@ -1,0 +1,518 @@
+#!/usr/bin/env python3
+"""keel-lint 自测套件（DESIGN.md §9.3）
+
+用法：
+    bash   keel/checks/test-lint.sh  [-v] [--keep]
+    python3 keel/checks/test-lint.py [-v] [--keep]
+
+做什么：
+    1. 为 §9.1 检查表的每一项，造一个"**应该被判死**"的故障仓库；另加若干
+       "**应该放行**"的合法基线（含 `_template`、`decisions/`、`stale-check: off`
+       三类豁免）。逐例跑 checks/keel-lint.sh，断言输出与退出码。
+    2. DOC 检查：若能在上级目录找到 DESIGN.md，则比对随仓库发布的
+       keel-lint.sh 与文档 §9.3 代码块是否**逐字一致**——防止"文档一套、脚本一套"。
+
+为什么需要它：
+    §9 的整个主张是"机器验"。**验证脚本自己也是规则，也会腐烂**——改了检查项却
+    忘了改用例、或改了文档却忘了改脚本，都会让 lint 悄悄变成摆设。这个套件就是
+    规则本身的回归测试：**改 keel-lint.sh 必须同时改这里，否则 CI 红**。
+
+依赖：
+    python3（仅测试用）。keel-lint.sh 本身只依赖 bash 3.2+ / awk / sed / find，
+    加可选的 tsort（环检测）与 git（frozen 检查）。
+
+退出码：
+    0 = 全部用例通过（含跳过）；1 = 有用例失败。
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+LINT = os.path.join(HERE, "keel-lint.sh")
+BUDGET_SRC = os.path.join(HERE, "budget.env")
+
+ANCHOR = "任何任务开始前，先读 keel/INDEX.md 与其中指向的 NOW.md，并遵守 INDEX.md 里的检索协议。"
+
+# 合法基线仓库：一个合规到不能再合规的 MVP（§12.1）
+FILES = {
+    "keel/INDEX.md": """---
+scope: meta
+status: active
+last-verified: 2026-01-01
+keywords: [索引, 入口, 路由]
+keel-version: 2.1.0
+project-state: building
+---
+
+# keel · INDEX
+
+## 检索协议（必须遵守）
+1. 必读：INDEX.md（唯一入口）+ 当前 NOW*.md
+2. 定位：先 grep -rl "关键词" keel/ --exclude-dir=archive --exclude-dir=NOW-history
+3. 读取：只 read 命中的那一个文件
+4. 预算：单次检索输出 ≤100 行；本轮 Keel 加载总量 ≤15,000 字节
+5. 写回：完成任务必须写回 NOW*.md
+
+## 路由（scope → 入口）
+| scope | 一句话 | 入口 |
+|---|---|---|
+| meta | 宪法与地图 | [CONSTITUTION.md](CONSTITUTION.md) |
+| now | 当前焦点 | [NOW.md](NOW.md) |
+| db | 数据库 | [pitfalls/INDEX.md](pitfalls/INDEX.md) |
+| meta | 校验规则 | [rules.md](checks/rules.md) |
+
+## 冷区指针（只此一行）
+[archive/](archive/) · [NOW-history/](NOW-history/)
+""",
+    "keel/CONSTITUTION.md": """---
+scope: meta
+status: active
+last-verified: 2026-01-01
+keywords: [宪法, 红线]
+---
+# CONSTITUTION
+
+## 硬约束
+1. 单次会话 Keel 加载量 ≤5k token（见 @INDEX.md）
+""",
+    "keel/NOW.md": """---
+scope: now
+status: active
+last-verified: 2026-01-01
+updated: 2026-01-01
+keywords: [焦点, 交接]
+---
+# NOW · main
+
+## 当前焦点
+跑通 keel-lint
+## 下一步
+1. 接 CI
+""",
+    "keel/pitfalls/INDEX.md": """---
+scope: meta
+status: active
+last-verified: 2026-01-01
+keywords: [坑库, 索引]
+---
+| 症状（一行） | scope | 严重度 | → 文件 |
+|---|---|---|---|
+| 压测下 DB 连接耗尽 | db | P1 | [conn-pool.md](db/connection-pool-exhausted.md) |
+""",
+    "keel/pitfalls/_template.md": """## 症状
+## 根因
+## 正解
+""",
+    "keel/pitfalls/db/connection-pool-exhausted.md": """---
+scope: db
+status: active
+severity: P1
+last-verified: 2026-01-01
+triggers: 0
+keywords: [连接池, 超时]
+---
+## 症状
+压测下接口大面积 500。
+## 根因
+DAO 层循环内建连。
+## 正解
+- 连接必须走全局池
+""",
+    "keel/checks/rules.md": """---
+scope: meta
+status: active
+last-verified: 2026-01-01
+keywords: [校验, 规则]
+---
+# 扩展检查
+- 契约漂移：npm run check:contracts
+""",
+}
+
+# 一处注入 = 一个用例：(编号, 说明, §9.1 对应项, 期望输出片段, 期望退出码, 注入函数)
+CASES = []
+
+
+def case(cid, name, ref, expect, rc=1):
+    def deco(fn):
+        CASES.append((cid, name, ref, expect, rc, fn))
+        return fn
+    return deco
+
+
+def write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def sub(dst, rel, old, new, count=1):
+    p = os.path.join(dst, rel)
+    t = open(p, encoding="utf-8").read()
+    assert old in t, "注入失败（未找到锚点）: %s :: %r" % (rel, old)
+    open(p, "w", encoding="utf-8").write(t.replace(old, new, count))
+
+
+def app(dst, rel, text):
+    with open(os.path.join(dst, rel), "a", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+# ---------------- 合法基线（应放行） ----------------
+@case("00", "合法基线 MVP 全绿", "§12.1", [], rc=0)
+def c00(d):
+    pass
+
+
+@case("29", "`_template` 三级豁免（无 frontmatter / 无三段式）", "§3.4", [], rc=0)
+def c29(d):
+    pass
+
+
+@case("30", "`decisions/` 豁免陈旧", "§9.4", [], rc=0)
+def c30(d):
+    write(os.path.join(d, "keel/decisions/0001-old-adr.md"),
+          "---\nscope: meta\nstatus: active\nlast-verified: 2026-01-01\nkeywords: [adr]\n---\n# 老 ADR\n")
+    app(d, "keel/NOW.md", "\n见 @decisions/0001-old-adr.md\n")
+
+
+@case("32", "`stale-check: off` 逃生口", "§9.4", [], rc=0)
+def c32(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md",
+        "last-verified: 2026-01-01", "last-verified: 2026-01-01\nstale-check: off")
+
+
+# ---------------- 预算（§9.1-1） ----------------
+@case("01", "文件超行数", "§9.1-1", ["超行数"])
+def c01(d):
+    app(d, "keel/INDEX.md", "".join("- r%d\n" % i for i in range(100)))
+
+
+@case("02", "文件超字节（行数合法）", "§9.1-1", ["超字节"])
+def c02(d):
+    row = "| 压测下数据库连接池耗尽导致接口大面积 500 报错 | db | P1 | [conn-pool.md](db/connection-pool-exhausted.md) |\n"
+    app(d, "keel/pitfalls/INDEX.md", row * 60)
+
+
+@case("03", "单行超字节", "§9.1-1", ["单行超限"])
+def c03(d):
+    app(d, "keel/checks/rules.md", "x" * 400 + "\n")
+
+
+@case("25", "单目录文件数超限", "§9.1-1", ["目录文件超限"])
+def c25(d):
+    for i in range(21):
+        write(os.path.join(d, "keel/checks/gen-%d.sh" % i), "#!/bin/sh\n")
+
+
+# ---------------- frontmatter（§9.1-2） ----------------
+@case("04", "frontmatter 超行数", "§9.1-2", ["frontmatter 超行数"])
+def c04(d):
+    p = os.path.join(d, "keel/pitfalls/db/connection-pool-exhausted.md")
+    t = open(p, encoding="utf-8").read().split("---\n")
+    extra = "".join("a%d: v\n" % i for i in range(1, 8))
+    open(p, "w", encoding="utf-8").write("---\n" + t[1] + extra + "---\n" + t[2])
+
+
+@case("05", "frontmatter 超字节", "§9.1-2", ["frontmatter 超字节"])
+def c05(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md",
+        "keywords: [连接池, 超时]",
+        "keywords: [" + ", ".join("术语%d" % i for i in range(1, 60)) + "]")
+
+
+@case("06", "缺基础字段 keywords", "§9.1-2", ["缺 keywords"])
+def c06(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md", "keywords: [连接池, 超时]\n", "")
+
+
+@case("11", "坑条目缺角色字段 triggers", "§9.1-2", ["缺 triggers"])
+def c11(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md", "triggers: 0\n", "")
+
+
+# ---------------- 死链 / 孤儿 / 三段式（§9.1-3 / 4 / 5） ----------------
+@case("22", "死链（热区 + 冷区都要查）", "§9.1-3", ["死链"])
+def c22(d):
+    app(d, "keel/NOW.md", "\n见 [gone.md](../gone.md)\n")
+    write(os.path.join(d, "keel/archive/old.md"), "见 [vanish.md](vanish.md)\n")
+
+
+@case("23", "孤儿（未被任何热区文档引用）", "§9.1-4", ["孤儿"])
+def c23(d):
+    write(os.path.join(d, "keel/skills/orphan.md"),
+          "---\nscope: meta\nstatus: active\nlast-verified: 2026-01-01\nkeywords: [x]\ntrigger: t\n---\n# orphan\n")
+
+
+@case("24", "坑条目缺三段式", "§9.1-5", ["缺失【## 根因】"])
+def c24(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md", "## 根因\n", "")
+
+
+# ---------------- 值域与格式（§9.1-6） ----------------
+@case("07", "status 值域非法", "§9.1-6", ["status 值域非法"])
+def c07(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md", "status: active", "status: bogus")
+
+
+@case("08", "severity 值域非法", "§9.1-6", ["severity 值域非法"])
+def c08(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md", "severity: P1", "severity: P9")
+
+
+@case("09", "keywords 为空", "§9.1-6", ["keywords 为空"])
+def c09(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md", "keywords: [连接池, 超时]", "keywords: []")
+
+
+@case("10", "last-verified 非 YYYY-MM-DD", "§9.1-6", ["last-verified 非 YYYY-MM-DD"])
+def c10(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md",
+        "last-verified: 2026-01-01", "last-verified: 2026-1-1")
+
+
+# ---------------- 登记与索引（§9.1-7） ----------------
+@case("14", "pitfalls 索引混入非表格正文", "§9.1-7", ["域索引含非表格正文"])
+def c14(d):
+    app(d, "keel/pitfalls/INDEX.md", "\n## 说明\n本索引按严重度倒序维护。\n")
+
+
+@case("15", "坑条目未登记进索引", "§9.1-7", ["未登记进 pitfalls/INDEX.md"])
+def c15(d):
+    write(os.path.join(d, "keel/pitfalls/db/unregistered.md"),
+          "---\nscope: db\nstatus: active\nseverity: P2\nlast-verified: 2026-01-01\ntriggers: 0\nkeywords: [x]\n---\n## 症状\na\n## 根因\nb\n## 正解\nc\n")
+
+
+# ---------------- 命名（§9.1-8） ----------------
+@case("12", "热区文件名含日期", "§9.1-8", ["热区文件名含日期"])
+def c12(d):
+    write(os.path.join(d, "keel/pitfalls/db/2026-01-02-note.md"),
+          "---\nscope: db\nstatus: active\nseverity: P2\nlast-verified: 2026-01-01\ntriggers: 0\nkeywords: [笔记]\n---\n## 症状\na\n## 根因\nb\n## 正解\nc\n")
+    app(d, "keel/pitfalls/INDEX.md", "| 随手笔记 | db | P2 | [n.md](db/2026-01-02-note.md) |\n")
+
+
+@case("13", "命名含大写 / 非 kebab-case", "§9.1-8", ["命名含大写"])
+def c13(d):
+    write(os.path.join(d, "keel/pitfalls/db/BadName.md"),
+          "---\nscope: db\nstatus: active\nseverity: P2\nlast-verified: 2026-01-01\ntriggers: 0\nkeywords: [x]\n---\n## 症状\na\n## 根因\nb\n## 正解\nc\n")
+    app(d, "keel/pitfalls/INDEX.md", "| 大写名 | db | P2 | [b.md](db/BadName.md) |\n")
+
+
+# ---------------- 引用环（§9.1-9） ----------------
+@case("16", "引用成环", "§9.1-9", ["引用存在环"])
+def c16(d):
+    write(os.path.join(d, "keel/pitfalls/db/alpha.md"),
+          "---\nscope: db\nstatus: active\nseverity: P2\nlast-verified: 2026-01-01\ntriggers: 0\nkeywords: [a]\n---\n## 症状\n见 @./beta.md\n## 根因\nb\n## 正解\nc\n")
+    write(os.path.join(d, "keel/pitfalls/db/beta.md"),
+          "---\nscope: db\nstatus: active\nseverity: P2\nlast-verified: 2026-01-01\ntriggers: 0\nkeywords: [b]\n---\n## 症状\na\n## 根因\n见 @./alpha.md\n## 正解\nc\n")
+    app(d, "keel/pitfalls/INDEX.md",
+        "| alpha | db | P2 | [a.md](db/alpha.md) |\n| beta | db | P2 | [b.md](db/beta.md) |\n")
+
+
+# ---------------- 必读与点火（§9.1-10） ----------------
+@case("17", "缺必读文件 NOW.md", "§9.1-10", ["缺必读文件: NOW"])
+def c17(d):
+    os.remove(os.path.join(d, "keel/NOW.md"))
+
+
+@case("18", "根 INDEX 缺 keel-version", "§9.1-10", ["缺 keel-version"])
+def c18(d):
+    sub(d, "keel/INDEX.md", "keel-version: 2.1.0\n", "")
+
+
+@case("19", "根 INDEX 缺 project-state", "§9.1-10", ["缺 project-state"])
+def c19(d):
+    sub(d, "keel/INDEX.md", "project-state: building\n", "")
+
+
+@case("21", "缺 §4.1 点火锚点", "§9.1-10", ["点火锚点缺失"])
+def c21(d):
+    os.remove(os.path.join(d, "CLAUDE.md"))
+
+
+# ---------------- 状态机（§9.1-11） ----------------
+@case("28", "例外决策缺 created 字段", "§9.1-11", ["例外决策缺 created"])
+def c28(d):
+    write(os.path.join(d, "keel/decisions/0001-exception.md"),
+          "---\nscope: meta\nstatus: active\nlast-verified: 2026-01-01\nkeywords: [例外]\ntype: exception\n---\n# 例外\n")
+
+
+# ---------------- 取代关系（§9.1-14） ----------------
+@case("31", "superseded-by 指向不存在的文件", "§9.1-14", ["superseded-by 指向不存在"])
+def c31(d):
+    write(os.path.join(d, "keel/decisions/0001-old-adr.md"),
+          "---\nscope: meta\nstatus: active\nlast-verified: 2026-01-01\nkeywords: [adr]\nsuperseded-by: 0009-nope.md\n---\n# 老 ADR\n")
+    app(d, "keel/NOW.md", "\n见 @decisions/0001-old-adr.md\n")
+
+
+# ---------------- 预算真源（§9.3） ----------------
+@case("20", "缺预算真源 budget.env", "§9.3", ["缺预算真源"])
+def c20(d):
+    os.remove(os.path.join(d, "keel/checks/budget.env"))
+
+
+# ---------------- 告警（warn，不应导致失败） ----------------
+@case("26", "陈旧告警", "§9.1-12", ["stale"], rc=0)
+def c26(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md",
+        "last-verified: 2026-01-01", "last-verified: 2020-01-01")
+
+
+@case("27", "待蒸馏告警", "§9.1-13", ["待蒸馏"], rc=0)
+def c27(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md", "triggers: 0", "triggers: 3")
+
+
+def build_base(dst, budget):
+    for rel, text in FILES.items():
+        write(os.path.join(dst, rel), text)
+    write(os.path.join(dst, "keel/checks/budget.env"), budget)
+    write(os.path.join(dst, "CLAUDE.md"), ANCHOR + "\n")
+    for d in ("keel/archive", "keel/NOW-history"):
+        os.makedirs(os.path.join(dst, d), exist_ok=True)
+
+
+def run_lint(cwd):
+    p = subprocess.run(["bash", LINT, "keel"], cwd=cwd,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out = p.stdout.decode("utf-8", "replace")
+    err = p.stderr.decode("utf-8", "replace")
+    return p.returncode, out, err
+
+
+def find_doc():
+    """向上找 DESIGN.md（只有开发本设计稿的仓库里才有）。"""
+    d = HERE
+    for _ in range(6):
+        cand = os.path.join(d, "DESIGN.md")
+        if os.path.isfile(cand):
+            return cand
+        d = os.path.dirname(d)
+    return None
+
+
+def check_doc_consistency():
+    """随仓库发布的 keel-lint.sh 必须与 DESIGN.md §9.3 逐字一致。"""
+    doc = find_doc()
+    if not doc:
+        return None, "未找到 DESIGN.md（发布版 starter 里正常）"
+    text = open(doc, encoding="utf-8").read()
+    for block in re.findall(r"```bash\n(.*?)```", text, re.S):
+        if block.startswith("#!/usr/bin/env bash"):
+            shipped = open(LINT, encoding="utf-8").read()
+            if block.rstrip("\n") == shipped.rstrip("\n"):
+                return True, "与 DESIGN.md §9.3 逐字一致"
+            return False, "与 DESIGN.md §9.3 不一致——改了脚本请同步文档，反之亦然"
+    return False, "DESIGN.md 里找不到 §9.3 的脚本代码块"
+
+
+@case("33", "frontmatter 行内注释（YAML 语义）", "§6.1", [], rc=0)
+def c33(d):
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md",
+        "status: active", "status: active          # active | distilled | archived")
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md",
+        "severity: P1", "severity: P1            # P0–P3")
+    sub(d, "keel/pitfalls/db/connection-pool-exhausted.md",
+        "triggers: 0", "triggers: 0             # 每被触发一次 +1")
+    sub(d, "keel/INDEX.md",
+        "project-state: building", "project-state: building     # exploring | architecture-locked | building | frozen")
+
+
+@case("34", "域索引（非 pitfalls）含正文", "§9.1-7", ["域索引含非表格正文"])
+def c34(d):
+    write(os.path.join(d, "keel/skills/INDEX.md"),
+          "---\nscope: meta\nstatus: active\nlast-verified: 2026-01-01\nkeywords: [技能]\n---\n\n## 说明\n本索引按加入顺序维护。\n")
+
+
+@case("35", "决策模板的占位字段不算数（应通过）", "§3.4", [], rc=0)
+def c35(d):
+    write(os.path.join(d, "keel/decisions/_template.md"),
+          "---\nscope: meta\nstatus: active\nlast-verified: 2026-01-01\nkeywords: [adr]\n"
+          "type: exception   # 冻结期例外才改\n"
+          "superseded-by:   # 占位注释，值整行是注释\n"
+          "---\n# 模板\n")
+
+
+def main():
+    argv = [a for a in sys.argv[1:]]
+    verbose = "-v" in argv or "--verbose" in argv
+    keep = "--keep" in argv
+
+    if not os.path.isfile(LINT):
+        print("❌ 找不到 %s" % LINT)
+        return 1
+    if not os.path.isfile(BUDGET_SRC):
+        print("❌ 找不到 %s" % BUDGET_SRC)
+        return 1
+
+    budget = open(BUDGET_SRC, encoding="utf-8").read()
+    root = tempfile.mkdtemp(prefix="keel-test-lint-")
+    base = os.path.join(root, "base")
+    build_base(base, budget)
+
+    tools = []
+    for t in ("tsort", "git"):
+        tools.append("%s:%s" % (t, "有" if shutil.which(t) else "无（相关检查会跳过）"))
+
+    print("keel-lint 自测 · 用例 %d 例 · 临时目录 %s" % (len(CASES), root))
+    print("  工具可用性: " + "  ".join(tools))
+    print("=" * 76)
+
+    ok = bad = 0
+    for cid, name, ref, expect, want_rc, fn in CASES:
+        d = os.path.join(root, cid)
+        shutil.copytree(base, d)
+        fn(d)
+        rc, out, err = run_lint(d)
+        fails = re.findall(r"❌.*", out)
+        warns = re.findall(r"⚠️.*", out)
+        lines = fails + warns
+
+        if expect:
+            hit = all(any(e in ln for ln in lines) for e in expect)
+            passed = hit and rc == want_rc
+            detail = "命中" if hit else "**未命中**"
+        else:
+            passed = not fails and rc == 0
+            detail = "干净" if not fails else "**不该有 ❌**"
+        ok += passed
+        bad += not passed
+
+        print("[%s] %s %-42s %s" % ("PASS" if passed else "FAIL", cid, name, ref))
+        if verbose or not passed:
+            print("        期望=%s 实际=%s  退出码=%d（期望 %d）" % (expect or "无 ❌", detail, rc, want_rc))
+            if err.strip():
+                print("        [stderr] %s" % err.strip()[:200].replace("\n", " | "))
+            for ln in lines[:6]:
+                print("        " + ln)
+            if not passed and not lines:
+                print("        （无任何 ❌/⚠️ 输出）")
+
+    print("=" * 76)
+    doc_ok, doc_msg = check_doc_consistency()
+    if doc_ok is None:
+        print("[SKIP] DOC  脚本与文档一致性          %s" % doc_msg)
+    else:
+        print("[%s] DOC  脚本与文档一致性          %s" % ("PASS" if doc_ok else "FAIL", doc_msg))
+        if not doc_ok:
+            bad += 1
+
+    print("=" * 76)
+    if bad == 0:
+        print("✅ 自测通过：%d/%d 例" % (ok, len(CASES)))
+    else:
+        print("❌ 自测失败：%d 例未通过（共 %d 例）" % (bad, len(CASES)))
+    if keep:
+        print("   临时目录保留：%s" % root)
+    else:
+        shutil.rmtree(root, ignore_errors=True)
+    return 1 if bad else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Keel pre-commit（《Keel 设计稿》§10.4 之二）
+# 由 install-hooks.sh 挂载（core.hooksPath），本文件是规则的一部分：请走 PR 修改。
+# 只在 keel/ 下的 md 有变更时才跑——否则每次提交都白等。
+set -uo pipefail
+
+KEEL_DIR="keel"
+[ -d "$KEEL_DIR/checks" ] || exit 0
+
+changed=$(git diff --cached --name-only | grep -E "^${KEEL_DIR}/.*\.md$" || true)
+[ -z "$changed" ] && exit 0
+
+echo "keel: keel/ 下有 md 变更，跑一致性校验…"
+if ! bash "$KEEL_DIR/checks/keel-lint.sh" "$KEEL_DIR"; then
+  echo
+  echo "❌ keel-lint 未通过，提交已拦下。"
+  echo "   修完再提交；确实要绕过用 git commit --no-verify，并在 NOW.md 的阻塞表记一笔原因。"
+  exit 1
+fi

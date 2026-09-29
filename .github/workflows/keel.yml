@@ -1,0 +1,22 @@
+name: keel
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  keel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 先验护栏：如果 lint 本身坏了，下面的"0 fail"毫无意义
+      - name: 自测（lint 能判死它声称能判死的问题）
+        run: bash keel/checks/test-lint.sh
+
+      - name: 内核校验（预算 / frontmatter / 值域 / 命名 / 登记 / 死链 / 孤儿 / 陈旧 / 状态机）
+        run: bash keel/checks/keel-lint.sh keel
+
+      # 项目自定的扩展检查（keel/checks/rules.md 里声明的命令）
+      # - name: 扩展检查
+      #   run: npm run check:contracts
