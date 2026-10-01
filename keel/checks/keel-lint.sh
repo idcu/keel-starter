@@ -53,7 +53,7 @@ to_epoch() { date -j -f "%Y-%m-%d" "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/d
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 # 用临时文件收集结果：兼容 bash 3.2（case 不能直接出现在 $() 内），也避开管道子 shell 吞掉 fail 计数
-deadf="$tmp/dead"; corpus="$tmp/corpus"; longf="$tmp/long"; idxbad="$tmp/idxbad"; edges="$tmp/edges"
+deadf="$tmp/dead"; refd="$tmp/refd"; longf="$tmp/long"; idxbad="$tmp/idxbad"; edges="$tmp/edges"
 
 echo "keel-lint · $(date '+%Y-%m-%d %H:%M') · 目录=$KEEL_DIR · 热区文档=$(hot_files | wc -l | tr -d '[:space:]')"
 echo "── 1. 预算：行数 / 字节 / 单行 / 目录文件数"
@@ -247,12 +247,27 @@ while IFS= read -r f; do
 done < <(all_files) > "$deadf"
 if [ -s "$deadf" ]; then cat "$deadf"; fail=1; fi
 
-echo "── 9. 孤儿（热区文档未被任何热区文档引用；INDEX/_template 豁免）"
-while IFS= read -r g; do cat "$g" >>"$corpus" 2>/dev/null; printf '\n' >>"$corpus"; done < <(hot_files)
+echo "── 9. 孤儿（热区文档未被任何热区文档以链接引用；INDEX/_template 豁免）"
+# v3.1 修正：孤儿判定改用"真实链接图"——把每条链接解析成目标文件的绝对路径再比对。
+# 旧实现是「grep 文件名」的近似：正文里偶然出现同名子串会漏报，文件改名会误报。
+: > "$refd"
+while IFS= read -r f; do
+  fdir=$(cd "$(dirname "$f")" && pwd)
+  {
+    grep -oE '\]\([^)]+\)' "$f" 2>/dev/null | sed -E 's/^\]\(([^) ]+).*/\1/'
+    grep -oE '@[A-Za-z0-9_./-]+\.md' "$f" 2>/dev/null | tr -d '@'
+  } | sort -u | while IFS= read -r link; do
+    case "$link" in http*|mailto:*|"") continue ;; esac
+    t="${link%%#*}"; [ -z "$t" ] && continue
+    tdir=$(cd "$fdir/$(dirname "$t")" 2>/dev/null && pwd) || continue
+    [ -e "$tdir/$(basename "$t")" ] && printf '%s\n' "$tdir/$(basename "$t")"
+  done
+done < <(hot_files) > "$refd"
 while IFS= read -r f; do
   base=$(basename "$f")
   case "$base" in INDEX.md|_template*) continue ;; esac
-  grep -qF "$base" "$corpus" || fail_msg "孤儿（未被任何热区文档引用）: $(rel_of "$f")"
+  fabsp="$(cd "$(dirname "$f")" && pwd)/$base"
+  grep -qxF "$fabsp" "$refd" || fail_msg "孤儿（未被任何热区文档链接引用）: $(rel_of "$f")"
 done < <(hot_files)
 
 echo "── 10. 陈旧（last-verified / NOW updated；豁免类目见 §9.4）"
@@ -330,6 +345,13 @@ while IFS= read -r d; do
   [ -n "${sb:-}" ] || continue
   [ -e "$(dirname "$d")/$sb" ] || fail_msg "superseded-by 指向不存在的文件（${sb}）: $(rel_of "$d")"
 done < <(find "$KEEL_DIR/decisions" -name '*.md' 2>/dev/null)
+
+echo "── 13. 闭环钩子（本体存在且可执行；§10.4 铁律：缺一，闭环不成立）"
+for h in pre-commit commit-msg; do
+  hf="$KEEL_DIR/checks/hooks/$h"
+  if [ ! -f "$hf" ]; then fail_msg "缺闭环钩子本体: checks/hooks/$h"
+  elif [ ! -x "$hf" ]; then fail_msg "闭环钩子不可执行（需 chmod +x）: checks/hooks/$h"; fi
+done
 
 echo "──"
 if [ "$fail" -eq 0 ]; then echo "✅ keel-lint 通过"; else echo "❌ keel-lint 失败（见上方 ❌ 项）"; fi

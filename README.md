@@ -24,7 +24,7 @@ cp .github/workflows/keel.yml /path/to/your-project/.github/workflows/
 # 4. 内核校验：必须 0 fail
 bash keel/checks/keel-lint.sh keel
 
-# 5. 自测：必须 36/36
+# 5. 自测：必须 38/38
 bash keel/checks/test-lint.sh
 ```
 
@@ -54,13 +54,45 @@ bash keel/checks/test-lint.sh
 后六项是**按需层**：不进 MVP，痛点到了再加（规格见设计稿 §5.7）。
 所有空目录里都有 `_template*` 或 `_template.schema.json`，复制改名即可。
 
-## 三个命令
+## 命令
 
 ```bash
+# 日常三个
 bash keel/checks/keel-lint.sh keel        # 一致性校验：0 fail 才放行（pre-commit 与 CI 都跑它）
-bash keel/checks/test-lint.sh             # lint 自测：36 例故障注入 + 脚本与文档一致性
-bash keel/checks/install-hooks.sh         # 装钩子（每人 clone 后跑一次）
+bash keel/checks/test-lint.sh             # lint 自测：38 例故障注入 + 脚本与文档一致性
+bash keel/checks/install-hooks.sh         # 装钩子（每人 clone 后跑一次，装完自动复核）
+
+# 按需
+bash keel/checks/verify-hooks.sh          # 钩子"验谎"：本体可执行 + 挂载点正确（CI 加 --allow-unset）
+bash keel/checks/load-estimate.sh 关键词   # 本轮要读多少字节？超预算即非零退出（§8 协议第 4 条）
+bash keel/checks/keel-lite.sh keel        # 裁掉按需层成最小集（默认 dry-run，--apply 才动手）
+python3 keel/checks/mcp/keel-mcp-server.py --self-test   # MCP 只读服务自测（8 项）
+bash keel/checks/check-mcp-config.sh      # 已声明的 MCP server 是否可达（未声明即正常）
 ```
+
+## 小项目：先裁成最小集
+
+全量骨架带 6 个"按需层"（`contracts/` `env/` `skills/` `decisions/` `ARCHITECTURE.md` `GLOSSARY.md`）。
+用不上就先裁掉——`keel-lite.sh` 会**连带剥离 `INDEX.md` 里的对应路由行**，否则删了目录就留死链：
+
+```bash
+bash keel/checks/keel-lite.sh keel           # 先看计划（dry-run，不动文件）
+bash keel/checks/keel-lite.sh keel --apply   # 确认后执行；裁完自动跑 lint 复核
+```
+
+痛点到了再加回来：starter 一直带着骨架，复制 `_template*` 改名即可（规格见设计稿 §5.7）。
+
+## 接了 MCP 的话
+
+`keel/checks/mcp/keel-mcp-server.py` 把 INDEX / CONSTITUTION / NOW 暴露成**只读** MCP resource——
+让"必读"变成协议动作，而不是提示词里的礼貌请求（设计稿 §4.2 / §4.4）：
+
+```json
+{"mcpServers": {"keel": {"command": "python3",
+  "args": ["<绝对路径>/keel/checks/mcp/keel-mcp-server.py"]}}}
+```
+
+想补齐 `grep` 的语义召回（Serena 等），也走同一个接入位，见设计稿 §9.5。
 
 ## 闭环怎么被守住
 
@@ -68,9 +100,10 @@ bash keel/checks/install-hooks.sh         # 装钩子（每人 clone 后跑一�
 
 | ① 锚点 | ② pre-commit | ③ commit-msg | ④ CI |
 |---|---|---|---|
-| 每次任务开始先读 INDEX + NOW | `keel/` 下 md 变更即跑 lint，0 fail 才放行 | message 里写 `pitfall: <文件名>` 自动给 `triggers` +1 | lint 0 fail + 自测 36/36 |
+| 每次任务开始先读 INDEX + NOW | `keel/` 下 md 变更即跑 lint，0 fail 才放行 | message 里写 `pitfall: <文件名>` 自动给 `triggers` +1 | lint 0 fail + 自测 38/38 |
 
-**缺一处，闭环就退化成自觉。**
+**缺一处，闭环就退化成自觉。** 所以②③也在检查面内：lint 第 16 项管"钩子本体在不在且可执行"（防误删），
+`verify-hooks.sh` 管"本地到底装没装"（`core.hooksPath`）——两者都失效才是真正没人知道的静默故障。
 
 ## 约定（改之前先看这几条）
 
@@ -80,4 +113,7 @@ bash keel/checks/install-hooks.sh         # 装钩子（每人 clone 后跑一�
   所以**每个 clone 都要跑一次第 2 步**（CI 是这件事的兜底）
 - **域索引（`*/INDEX.md`）只允许表格行**，"怎么填"写在同目录的 `_template*` 里——索引负责定位，模板负责教怎么填
 - **改了 `keel/checks/keel-lint.sh` 必须同时改 `test-lint.py`**，否则自测红（那条用例专门防这个）
-- 自测需要 python3；**`keel-lint.sh` 本体只依赖 bash 3.2+ / awk / sed / find**（外加可选的 `tsort`、`git`）
+- **孤儿 = 没有被任何热区文档用链接指向**。正文里提到文件名不算引用——写文档时别把链接字面量当例子
+  （会当场被判死链，见 `pitfalls/meta/link-syntax-example-becomes-real-link.md`）
+- 自测需要 python3；**`keel-lint.sh` 本体只依赖 bash 3.2+ / awk / sed / find**（外加可选的 `tsort`、`git`）。
+  MCP 服务同样只依赖 python3 标准库，且**不进内核**——`keel-lint.sh` 不引用它

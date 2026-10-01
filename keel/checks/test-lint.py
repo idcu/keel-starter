@@ -249,6 +249,14 @@ def c23(d):
           "---\nscope: meta\nstatus: active\nlast-verified: 2026-01-01\nkeywords: [x]\ntrigger: t\n---\n# orphan\n")
 
 
+@case("37", "正文提及文件名但无链接——仍判孤儿（真实链接图）", "§9.1-4", ["孤儿"])
+def c37(d):
+    write(os.path.join(d, "keel/skills/orphan.md"),
+          "---\nscope: meta\nstatus: active\nlast-verified: 2026-01-01\nkeywords: [x]\ntrigger: t\n---\n# orphan\n")
+    # 只在正文里"提到"文件名、不建立链接：旧的 grep 近似会因此放过它
+    app(d, "keel/NOW.md", "\n本轮参考了 orphan.md 的做法。\n")
+
+
 @case("24", "坑条目缺三段式", "§9.1-5", ["缺失【## 根因】"])
 def c24(d):
     sub(d, "keel/pitfalls/db/connection-pool-exhausted.md", "## 根因\n", "")
@@ -356,6 +364,12 @@ def c20(d):
     os.remove(os.path.join(d, "keel/checks/budget.env"))
 
 
+# ---------------- 闭环钩子本体（§9.1-16） ----------------
+@case("36", "缺闭环钩子本体（§10.4 铁律：缺一，闭环不成立）", "§9.1-16", ["缺闭环钩子本体"])
+def c36(d):
+    os.remove(os.path.join(d, "keel/checks/hooks/commit-msg"))
+
+
 # ---------------- 告警（warn，不应导致失败） ----------------
 @case("26", "陈旧告警", "§9.1-12", ["stale"], rc=0)
 def c26(d):
@@ -373,6 +387,11 @@ def build_base(dst, budget):
         write(os.path.join(dst, rel), text)
     write(os.path.join(dst, "keel/checks/budget.env"), budget)
     write(os.path.join(dst, "CLAUDE.md"), ANCHOR + "\n")
+    # 闭环钩子本体（§10.4 铁律）：lint 第 13 项要求存在且可执行
+    for h in ("pre-commit", "commit-msg"):
+        hp = os.path.join(dst, "keel/checks/hooks", h)
+        write(hp, "#!/usr/bin/env bash\nexit 0\n")
+        os.chmod(hp, 0o755)
     for d in ("keel/archive", "keel/NOW-history"):
         os.makedirs(os.path.join(dst, d), exist_ok=True)
 

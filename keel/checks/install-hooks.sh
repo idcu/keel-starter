@@ -10,6 +10,8 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 KEEL=$(cd "$HERE/.." && pwd)
 ROOT=${1:-$(cd "$KEEL/.." && pwd)}
+# 归一化：core.hooksPath 必须用相对仓库根的路径表达，传入相对路径会让下面的前缀匹配失效
+ROOT=$(cd "$ROOT" 2>/dev/null && pwd) || { echo "❌ 项目根不存在: $ROOT"; exit 2; }
 
 [ -d "$KEEL/pitfalls" ] || { echo "❌ 这里不像 keel 目录: $KEEL"; exit 2; }
 [ -d "$HERE/hooks" ] || { echo "❌ 缺钩子本体目录: $HERE/hooks"; exit 2; }
@@ -44,3 +46,9 @@ echo
 echo "⚠️  core.hooksPath 是仓库级设置：挂上之后 .git/hooks/ 下的钩子全部失效。"
 echo "    如果你原本依赖 .git/hooks/ 里的东西，请先把它们迁进 ${HOOKS_REL}。"
 echo "    团队协作时这一步每个人都要跑一次（或用 CI 兜底）。"
+
+# 复核：装完立刻验一遍（§10.4 "验谎"）——安装脚本自己也要能被验，
+# 否则"装好了"就只是脚本的一句自述，而不是可复核的事实。
+echo
+echo "── 复核（verify-hooks.sh）"
+bash "$HERE/verify-hooks.sh" "$ROOT"

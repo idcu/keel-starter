@@ -2,3 +2,6 @@
 # 正常布局下它就在本仓库之外（../DESIGN.md），这条是防误加：
 # 比如打包发布内容时不小心把设计稿拷进 keel-starter/。
 DESIGN.md
+
+# keel-lite.sh 裁剪 INDEX.md 时留下的备份（确认无误后自行删除）
+*.keelbak

@@ -14,8 +14,19 @@ jobs:
       - name: 自测（lint 能判死它声称能判死的问题）
         run: bash keel/checks/test-lint.sh
 
-      - name: 内核校验（预算 / frontmatter / 值域 / 命名 / 登记 / 死链 / 孤儿 / 陈旧 / 状态机）
+      - name: 内核校验（预算 / frontmatter / 值域 / 命名 / 登记 / 死链 / 孤儿 / 陈旧 / 状态机 / 闭环钩子）
         run: bash keel/checks/keel-lint.sh keel
+
+      # 钩子"验谎"：CI 里的新 clone 天然没装 core.hooksPath，所以只验本体存在+可执行
+      - name: 闭环钩子本体（本地挂载点由各人跑 verify-hooks.sh 验）
+        run: bash keel/checks/verify-hooks.sh --allow-unset
+
+      # 可选能力"不落空"：MCP 服务本身能跑；项目若声明了外部 MCP server，也要可达
+      - name: MCP 只读服务自测
+        run: python3 keel/checks/mcp/keel-mcp-server.py --self-test
+
+      - name: 检索增强接入位（未声明即正常，恒 exit 0）
+        run: bash keel/checks/check-mcp-config.sh
 
       # 项目自定的扩展检查（keel/checks/rules.md 里声明的命令）
       # - name: 扩展检查

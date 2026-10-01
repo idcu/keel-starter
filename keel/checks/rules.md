@@ -1,7 +1,7 @@
 ---
 scope: meta
 status: active
-last-verified: 2026-09-30
+last-verified: 2026-10-01
 keywords: [校验, 规则, 扩展检查, CI]
 ---
 
@@ -31,9 +31,20 @@ keywords: [校验, 规则, 扩展检查, CI]
 <!-- 上面两行是占位示例：命令换成你项目里真实存在的，否则 CI 会红。
      不打算启用的规则整行删掉——留着一条跑不通的命令，比没有更糟。 -->
 
+## Keel 自带脚本（不属于扩展位，不用在这里声明）
+
+| 脚本 | 作用 | 何时跑 |
+|---|---|---|
+| `checks/install-hooks.sh` | 安装 pre-commit + commit-msg（写 `core.hooksPath`） | 每个 clone 一次 |
+| `checks/verify-hooks.sh` | 钩子"验谎"：本体可执行 + 挂载点正确 | 装完复核；CI 加 `--allow-unset` |
+| `checks/load-estimate.sh <关键词>` | 按 §7.2 口径算本轮加载量，超 `BYTES_SESSION` 即非零退出 | 每轮检索时（§8 协议第 4 条的可执行形式） |
+| `checks/keel-lite.sh [keel目录] --apply` | 裁掉按需层成最小集，并剥离 INDEX 里对应路由行 | 小项目第 0 天（§12.1） |
+| `checks/mcp/keel-mcp-server.py` | MCP 只读服务：把 INDEX / CONSTITUTION / NOW 暴露成 resource | 支持 MCP 的客户端（§4.4） |
+| `checks/check-mcp-config.sh` | 校验已声明的 MCP server 可达（未声明不算缺陷，恒 exit 0） | 接入语义检索后 · CI（§9.5） |
+
 ## 与内核的分工
 
-- **内核负责**（全项目通用、开箱即用）：预算、frontmatter、值域、命名、登记、引用环、死链、孤儿、陈旧、状态机。
+- **内核负责**（全项目通用、开箱即用）：预算、frontmatter、值域、命名、登记、引用环、死链、孤儿、陈旧、状态机、闭环钩子本体（§9.1-16）。
 - **本文件负责**（项目专属、需要技术栈知识）：契约与实现是否一致、术语是否统一、依赖许可证、生成物是否漂移。
 - CI 串联顺序：**先跑内核 lint（0 fail 才继续）**，再逐条跑本文件里级别为 ❌ 的命令；⚠️ 规则只输出、不阻断。
 

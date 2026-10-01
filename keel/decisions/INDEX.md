@@ -10,3 +10,7 @@ keywords: [决策, ADR, 索引]
 | 0001 | 预算：行数单约束 → 行数 × 字节 × 单行三约束，budget.env 为唯一真源 | active | [0001-budget-three-constraints.md](0001-budget-three-constraints.md) |
 | 0002 | 入口规格机器验：keel-version / project-state 必填，点火锚点按原文检查 | active | [0002-machine-verified-entry.md](0002-machine-verified-entry.md) |
 | 0003 | triggers 计数由 commit-msg 钩子自动完成，废除 AI 手工 +1 | active | [0003-hook-counted-triggers.md](0003-hook-counted-triggers.md) |
+| 0004 | 孤儿判定改"真实链接图"，不再按文件名字符串匹配 | active | [0004-orphan-link-graph.md](0004-orphan-link-graph.md) |
+| 0005 | 闭环钩子"验谎"：lint 第 16 项 + verify-hooks.sh | active | [0005-verify-hooks.md](0005-verify-hooks.md) |
+| 0006 | 单轮加载量进预算真源（BYTES_SESSION）+ load-estimate.sh | active | [0006-session-load-budget.md](0006-session-load-budget.md) |
+| 0007 | 兑现 MCP 只读落点，并把语义检索做成接入位 | active | [0007-mcp-readonly-and-retrieval-slot.md](0007-mcp-readonly-and-retrieval-slot.md) |
