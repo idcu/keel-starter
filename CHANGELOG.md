@@ -4,6 +4,30 @@
 升级按该字段增量合并，**不允许"一键覆盖"**（设计稿 §12.3）。
 本仓是发布仓：改动先在此发布，再更新项目仓里的子模块指针。
 
+## 3.1.1 — 2026-10-01
+
+修 v3.1.0 的一个首次运行缺陷（只在 Keel 自身的两仓布局下暴露，不影响常规用户项目）。
+
+### MCP 服务在"两仓布局"下找不到 keel 目录
+
+`keel-mcp-server.py` 的 `find_keel()` 只**向上**逐级查找，漏了 `keel-starter/keel` 这一层——
+于是在项目仓根目录跑 `--self-test` 会报"找不到 keel 目录"。
+常规用户项目（`<project>/keel/`）不受影响，问题只在把 keel 目录放在下一级子目录的布局下出现。
+
+修法：候选位置提为常量 `CANDIDATE_SUBDIRS = ("keel", "keel-starter/keel", "")`，
+三种布局（`./keel/`、`keel-starter/keel/`、`--keel` 显式指定）均已回归验证。
+
+> 这一条是"新组件必须自己先跑通"的实例：MCP 服务的 8 项自测在 starter 目录里全绿，
+> 换个 cwd 就挂——**验证覆盖面本身也是有盲区的**，所以自测要覆盖布置形态，而不只是功能。
+
+### 升级验收
+
+```bash
+bash keel/checks/keel-lint.sh keel
+bash keel/checks/test-lint.sh                             # 38/38
+python3 keel/checks/mcp/keel-mcp-server.py --self-test    # 8/8
+```
+
 ## 3.1.0 — 2026-10-01
 
 按"评估改进清单"依 ROI 全量推进：两个 P0 修的是**静默失效**，一个 P1 修的是**唯一没有检查形式的硬数字**。

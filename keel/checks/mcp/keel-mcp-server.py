@@ -43,11 +43,16 @@ class McpError(Exception):
         self.message = message
 
 
+# 逐级向上探测的相对位置：常规项目 ./keel/，本项目自身的两仓布局 keel-starter/keel/，最后是当前目录
+CANDIDATE_SUBDIRS = ("keel", "keel-starter/keel", "")
+
+
 def find_keel(start):
-    """从 start 向上找含 INDEX.md + CONSTITUTION.md 的目录（先看 ./keel/，再看 .）。"""
+    """从 start 向上找含 INDEX.md + CONSTITUTION.md 的目录（见 CANDIDATE_SUBDIRS）。"""
     d = os.path.abspath(start)
     while True:
-        for cand in (os.path.join(d, "keel"), d):
+        for rel in CANDIDATE_SUBDIRS:
+            cand = os.path.join(d, rel) if rel else d
             if os.path.isfile(os.path.join(cand, "INDEX.md")) and \
                os.path.isfile(os.path.join(cand, "CONSTITUTION.md")):
                 return cand
