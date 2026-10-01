@@ -24,15 +24,14 @@ v3.1.1 已发布并端到端复验通过；本轮（按 ROI 推进评估改进�
 - [x] 本轮新坑已登记：`pitfalls/meta/link-syntax-example-becomes-real-link.md`
 - [x] 两仓发布完成：v3.1.0 → **v3.1.1**（走 `scripts/release.sh --apply`，顺序：发布仓 → 项目仓）
 - [x] 全新克隆端到端复验：DESIGN.md 在 · 子模块 v3.1.1 · 自测 38/38 · lint 绿 · MCP 8/8
+- [x] 项目仓 CI 补齐：MCP 自测 · `check-mcp-config` · 发布脚本自检（6 步在 CI 式克隆里全绿）
 
 ## 未完成 / 半途
-- [ ] 项目仓 CI 未加 MCP 自测与 `check-mcp-config.sh`（当前由发布仓 CI 覆盖）
-- [ ] 公开仓库徽章：Gitee 无标准端点，待 GitHub 镜像就绪后再加
+- [ ] 公开仓库徽章：Gitee 无标准端点，待 GitHub 镜像就绪后再加（**当前唯一剩余项**）
 
 ## 下一步（按优先级）
-1. 视需要在项目仓 CI 补 MCP 自测与 `check-mcp-config.sh`
-2. 把 §8 协议第 4 条的 `load-estimate.sh` 接入会话开始流程（当前靠主动跑，不在钩子里）
-3. 补 GitHub 镜像后：加 CI 徽章，并把 §12.3 的镜像说明补成实操步骤
+1. 把 §8 协议第 4 条的 `load-estimate.sh` 接入会话开始流程（当前靠主动跑，不在钩子里）
+2. 补 GitHub 镜像后：加 CI 徽章，并把 §12.3 的镜像说明补成实操步骤
 
 ## 阻塞
 | 卡在 | 解锁条件 | 绕行 |
