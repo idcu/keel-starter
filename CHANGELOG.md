@@ -4,6 +4,51 @@
 升级按该字段增量合并，**不允许"一键覆盖"**（设计稿 §12.3）。
 本仓是发布仓：改动先在此发布，再更新项目仓里的子模块指针。
 
+## 3.3.8 — 2026-10-04
+
+**两件事：新用户在 Windows 上"装完即红"（P0），以及把第 1 步的摩擦降到可选。**
+
+### 1) 字节预算默认了 LF——CRLF 下当场撞爆（P0）
+
+全新 clone 到 `core.autocrlf=true` 的机器，装完跑 lint **立刻红**：
+
+```
+❌ 超字节 1211>1200: pitfalls/meta/arg-parse-shift-while-iterating.md
+```
+
+同一个文件在 CI（Linux）上是 **1181 字节，绿的**。差别就是每行多出来的 1 个 `\r`。
+
+**§7.1 的字节上限隐含假设了 LF，却没有任何东西保证它是 LF**——
+而这一屏恰好是新用户看到的第一屏，也是最不该红的一屏。
+
+修法不是"把那个文件改短"，而是**把行尾交给机器**：
+在 `keel/` 里放 `.gitattributes`（`* text=auto eol=lf`）。
+放在 `keel/`（而非仓库根）是关键：gitattributes 随目录生效，
+于是它跟着模板一起被复制进用户项目，**继续管住那些字节**。
+
+审计结果（CRLF 下会撞限的文件）：`pitfalls/_template.md`、
+`pitfalls/meta/arg-parse-shift-while-iterating.md`——均已留出余量；
+另有 5 个贴到 90%+，靠 `.gitattributes` 兜住。
+
+### 2) `install.sh --with-anchor`：第 1 步可以不用手抄
+
+装完还差三步，第 1 步"贴锚点"是最大的流失点：不贴，lint 当场判死、
+install.sh 以非零退出，新用户看到的是"装失败了"。
+
+现在加 `--with-anchor` 就由我写进 `AGENTS.md`：文件不存在则创建，
+已存在则**追加到末尾、一行不动你原来的内容**，已经有锚点则什么都不做（幂等）。
+
+**默认仍然是关闭**——未经允许改用户的 `AGENTS.md` 是越界；
+不加开关时脚本只提示这一行怎么加。
+
+### 升级验收
+
+```bash
+bash keel/checks/keel-lint.sh keel
+bash keel/checks/test-lint.sh                    # 38/38
+git check-attr text eol -- keel/INDEX.md         # 应为 text: set / eol: lf
+```
+
 ## 3.3.7 — 2026-10-03
 
 **`reset` 会误删遵守率的真实记录——加一个定向的 `reset --backfill`。**

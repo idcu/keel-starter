@@ -17,4 +17,5 @@ keywords: [坑库, 索引, shell, 性能, 批量化, 静默失效, 指标]
 | 手写 JSON 把空值写成 "n/a" 字符串，jq / json.load 解析失败 | meta | P2 | [meta/handwritten-json-nan-placeholder.md](meta/handwritten-json-nan-placeholder.md) |
 | 归档到 NOW-history/ 后报死链，但两个文件都存在（多了一层目录） | meta | P3 | [meta/cold-zone-link-prefix.md](meta/cold-zone-link-prefix.md) |
 | 文档里举例写链接语法，被 lint 判成死链 | meta | P3 | [meta/link-syntax-example-becomes-real-link.md](meta/link-syntax-example-becomes-real-link.md) |
+| 全新 clone 到 Windows，装完 lint 当场红：超字节 1211>1200（同文件在 CI 上是 1181） | meta | **P0** | [meta/byte-budget-assumes-lf.md](meta/byte-budget-assumes-lf.md) |
 | 临时 worktree 里 lint 报一大片孤儿/超字节（实测 27 条），主工作树同样内容却是 0 fail | meta | P1 | [meta/worktree-eol-differs-from-main.md](meta/worktree-eol-differs-from-main.md) |
