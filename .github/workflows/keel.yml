@@ -31,6 +31,20 @@ jobs:
       # 版本声明与可获取必须一致：keel-version 写了、CHANGELOG 写了，
       # 但**没有 tag** 的话，用户 `--ref v3.3.4` 直接拉不到（v3.2–v3.3 期间就是这样）。
       # 这条检查守的正是 README 里那句"两者一致"。
+      # 两份 install.sh 必须一致：根目录那份是**分发入口**（README 与 curl 指向它），
+      # keel/checks/ 那份会装进用户项目。实测踩过——修了后者忘了前者，
+      # 结果用户 curl 拿到旧版，--ref 静默装 main。
+      # 这里物理上必须两份（分发要自包含），所以**用机器保证它们不漂移**。
+      - name: 两份 install.sh 一致（分发入口 vs 项目内）
+        run: |
+          if ! diff -u install.sh keel/checks/install.sh > /tmp/inst.diff; then
+            echo "❌ 根目录 install.sh（分发入口）与 keel/checks/install.sh 不一致："
+            head -30 /tmp/inst.diff
+            echo "   修法：cp keel/checks/install.sh install.sh"
+            exit 1
+          fi
+          echo "✅ 两份一致"
+
       - name: 版本号与 tag 一致
         run: |
           set -uo pipefail

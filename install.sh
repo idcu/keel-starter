@@ -18,19 +18,23 @@ REPO="https://gitee.com/idcu/keel-starter.git"
 REF="main"
 TARGET=""
 
-for a in "$@"; do
-  case "$a" in
-    --ref) shift ;;
-    --ref=*) REF="${a#--ref=}" ;;
-    -*) echo "❌ 未知参数: $a"; exit 2 ;;
-    *) TARGET="$a" ;;
-  esac
-done
-# --ref 的值可能是下一个位置参数
+# 参数解析：**用 while + shift 逐个取**，不要写 `for a in "$@"` 里带 shift 的写法——
+# 那样会在遍历途中改掉 "$@"，实测 `install.sh <根> --ref v3.2.0` 会把 "v3.2.0"
+# 当成项目根（"❌ 目录不存在: v3.2.0"）。教训同 §7：集合被遍历时不要改它。
+#
+# EXPLICIT_REF 必须在这里（循环内）置位：循环用 shift 消耗参数，结束后 "$*"
+# 已空，那时再回头判断 " $* " 永远匹配不到——实测 --ref=v9.9.9 仍静默装了 main。
+EXPLICIT_REF=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --ref) REF="${2:-main}"; shift 2 ;;
-    *) shift ;;
+    --ref)
+      [ $# -ge 2 ] || { echo "❌ --ref 后面要跟版本号或分支名"; exit 2; }
+      REF="$2"; EXPLICIT_REF=1; shift 2 ;;
+    --ref=*) REF="${1#--ref=}"; EXPLICIT_REF=1; shift ;;
+    -*) echo "❌ 未知参数: $1"; exit 2 ;;
+    *)
+      [ -z "$TARGET" ] || { echo "❌ 只能给一个项目根（多了: $1）"; exit 2; }
+      TARGET="$1"; shift ;;
   esac
 done
 
@@ -47,14 +51,25 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 echo "keel-install · 目标=$TARGET · ref=$REF · 模式=$([ "$EXISTING" -eq 1 ] && echo '就地升级（保留你的内容）' || echo '全新安装')"
 
 echo "── 1. 取模板"
+# 显式指定 --ref 时，拉不到就**报错**，不静默回落到 main——
+# 用户以为自己固定了版本，实际拿到别的东西，比直接失败更坏。
+# 只有默认（未指定 --ref）才允许回落，那是"跟随最新版"的本意。
 if ! git clone --depth 1 --branch "$REF" "$REPO" "$tmp/starter" 2>/dev/null; then
-  # 分支不存在时回落到默认分支 + 提示
+  if [ "$EXPLICIT_REF" -eq 1 ]; then
+    echo "❌ 拉取失败：$REPO 的 '$REF' 不存在（或该地址不是可 clone 的 git 仓库）"
+    echo "   可用版本："
+    # 去掉 ^{}（那是 annotated tag 的 peeled ref，用户不需要看到）
+    git ls-remote --tags "$REPO" 2>/dev/null | grep -v '\^{}' | sed 's#.*refs/tags/#   #' | tail -5
+    echo "   也可去掉 --ref 跟随最新版（不推荐：版本会随 main 变动）"
+    exit 2
+  fi
+  # 未指定 --ref：分支名可能不存在（默认是 main），回落即可
   if ! git clone --depth 1 "$REPO" "$tmp/starter" 2>/dev/null; then
     echo "❌ 拉取失败: $REPO"
     echo "   也可手工下载后运行: bash install.sh <项目根>"
     exit 2
   fi
-  echo "   ⚠️  ref '$REF' 不存在，已用默认分支（可用 --ref 指定 tag）"
+  echo "   ⚠️  '$REF' 不是分支/tag，已用默认分支"
 fi
 [ -d "$tmp/starter/keel" ] || { echo "❌ 仓库里没有 keel/ 目录，不是 keel-starter"; exit 2; }
 
@@ -62,9 +77,12 @@ echo "── 2. 装文件"
 if [ "$EXISTING" -eq 1 ]; then
   # 只补缺失与工具链，**不覆盖**用户的 INDEX/NOW/pitfalls/decisions
   # （对应设计稿 §12.3：升级按字段增量合并，不允许一键覆盖）
+  # 工具链逐个补：这些是"实现"，升级应当覆盖（用户改的是文档，不是脚本）
+  # compliance.sh 也在列——漏了它，老用户升级后就没有基线记录能力
   for f in checks/budget.env checks/keel-lint.sh checks/load-estimate.sh \
            checks/keel-lite.sh checks/verify-hooks.sh checks/install-hooks.sh \
-           checks/check-mcp-config.sh checks/mcp/keel-mcp-server.py \
+           checks/compliance.sh checks/check-mcp-config.sh \
+           checks/mcp/keel-mcp-server.py \
            checks/hooks/pre-commit checks/hooks/commit-msg; do
     if [ -e "$tmp/starter/keel/$f" ]; then
       if [ -e "$TARGET/keel/$f" ]; then
@@ -80,6 +98,12 @@ if [ "$EXISTING" -eq 1 ]; then
   done
 else
   cp -R "$tmp/starter/keel" "$TARGET/keel" && echo "   + 已复制 keel/（含 checks / hooks / 模板）"
+fi
+
+# 记一条基线：装模板本身不是"一次工作"，不该进遵守率的分母。
+# 否则新用户第一次看 `compliance.sh report` 会被 50 个模板文件的初始化噪声吓到。
+if [ -f "$TARGET/keel/checks/compliance.sh" ]; then
+  bash "$TARGET/keel/checks/compliance.sh" record --baseline 1 --checked 0 --fails 0 --warns 0 --files 0 --md 0 2>/dev/null || true
 fi
 
 echo "── 3. 钩子可执行位（git 保留 100755，这里再确认一次）"
