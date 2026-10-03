@@ -4,7 +4,8 @@
 #   bash keel/checks/compliance.sh record            # 记录一轮（钩子自动调用，一般不手动跑）
 #   bash keel/checks/compliance.sh report [--json]   # 出报告：总轮次 / 命中轮次 / 遵守率
 #   bash keel/checks/compliance.sh backfill [--max N] [--dry]   # 回填历史提交（存量合规率）
-#   bash keel/checks/compliance.sh reset             # 清空（换基线时用）
+#   bash keel/checks/compliance.sh reset             # 全清（换基线时用；**实时记录清掉后无法重建**）
+#   bash keel/checks/compliance.sh reset --backfill  # 只清回填记录（重跑 backfill 前用这个）
 # 退出码: 0 = 正常；1 = 用法错误
 #
 # ── backfill 回填的是什么（v3.3.5 / ADR 0011）────────────────────
@@ -351,17 +352,41 @@ backfill() {
 
 # ── reset：清空 ─────────────────────────────────────────────────
 reset() {
+  local only_backfill=0
+  for a in "$@"; do [ "$a" = "--backfill" ] && only_backfill=1; done
+
+  # 只清回填记录：重跑 backfill 前的正常动作。
+  # **不能**用裸 reset 来"刷新存量合规率"——那会把实时遵守率的真实记录一起删掉
+  # （实测就这么丢过一轮已累积的数据；遵守率的记录无法重建，因为它只由 pre-commit 产生）。
+  if [ "$only_backfill" -eq 1 ]; then
+    local kept=0 dropped=0
+    if [ -s "$VIO" ]; then
+      local tmp="${VIO}.tmp"
+      : > "$tmp"
+      while IFS= read -r line; do
+        case "$line" in
+          *backfill=1*) dropped=$((dropped + 1)) ;;
+          *) printf '%s\n' "$line" >> "$tmp"; kept=$((kept + 1)) ;;
+        esac
+      done < "$VIO"
+      mv "$tmp" "$VIO"
+    fi
+    echo "compliance · 已清掉 ${dropped} 条回填记录，保留 ${kept} 条实时记录（遵守率数据未动）"
+    return 0
+  fi
+
   local n=0
   [ -f "$VIO" ] && n=$(wc -l < "$VIO" | tr -d '[:space:]') && : > "$VIO"
   [ -f "$LOAD" ] && : > "$LOAD"
-  echo "compliance · 已清空 ${n} 条记录（换基线时用；记下清空日期，§11.2 的口径要求可追溯）"
+  echo "compliance · 已清空 ${n} 条记录（**含实时遵守率，且无法重建**；换基线时才该这么做）"
+  echo "   只想刷新存量合规率的话，用：reset --backfill"
 }
 
 case "$cmd" in
   record)   record "$@" ;;
   report)   report "$@" ;;
   backfill) backfill "$@" ;;
-  reset)    reset ;;
-  *)        echo "用法: bash keel/checks/compliance.sh {record|report [--json]|backfill [--max N] [--dry]|reset}"; exit 1 ;;
+  reset)    reset "$@" ;;
+  *)        echo "用法: bash keel/checks/compliance.sh {record|report [--json]|backfill [--max N] [--dry]|reset [--backfill]}"; exit 1 ;;
 esac
 exit 0
