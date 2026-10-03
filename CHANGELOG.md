@@ -4,6 +4,48 @@
 升级按该字段增量合并，**不允许"一键覆盖"**（设计稿 §12.3）。
 本仓是发布仓：改动先在此发布，再更新项目仓里的子模块指针。
 
+## 3.3.3 — 2026-10-03
+
+**首次安装不再污染指标基线；并修一个手写 JSON 的合法性 bug。**
+
+### 首次安装记基线（P1）
+
+`install.sh` 装完会记一条 `baseline=1`。它**不计入遵守率的分母**——
+装模板不是"一次工作"。否则新用户第一次跑 `compliance.sh report`
+会看到 `files=50, md=33` 的初始化噪声，被当成"我刚装完就一堆问题"。
+
+`report` 会显式说明排除了几条基线记录。
+
+### 修手写 JSON 的 `n/a`（P2）
+
+`report --json` 在无数据时输出 `"rate":"n/a"`（**字符串**），
+`jq` / `json.load()` 解析会失败。**JSON 没有 NaN/NA，只有 `null`**。
+
+改为分两份：给 JSON 的用裸 `null`，给终端看的用 `—`。
+CI 已加断言：仅有基线时 `rounds` 须为 0、`rate` 须为 `null`。
+
+### 端到端验证了公网分发链路
+
+从 `gitee.com/.../raw/main/install.sh` 真拉一次装到空项目：
+URL 302 → 跟随后 7086 字节完整脚本 → clone `https://` 可通 → 装成功
+→ 正确判出锚点缺失并给出指引 → 补锚点后 lint 转绿 → 提交触发钩子并产出数据。
+
+**此前所有验证都把 `REPO` 换成本地路径，从没验过公网那一段。**
+
+### 顺带
+
+- `install.sh` 的就地升级清单补上 `compliance.sh`
+  （漏了它，老用户升级后就没有基线记录能力）
+- 新坑：`meta/handwritten-json-nan-placeholder.md`（P2）
+
+### 升级验收
+
+```bash
+bash keel/checks/keel-lint.sh keel
+bash keel/checks/test-lint.sh                    # 38/38
+bash keel/checks/compliance.sh report            # 新装应为 rounds=0
+```
+
 ## 3.3.2 — 2026-10-03
 
 **把遵守率的分母补全，并新增覆盖率指标。** 上一版修了分子（补回滚），这一版修分母。

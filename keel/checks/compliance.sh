@@ -57,7 +57,7 @@ shift 2>/dev/null || true
 # ── record：记一轮 ──────────────────────────────────────────────
 # 参数（由 pre-commit 传入）：--fails N --warns N --files N
 record() {
-  local fails=0 warns=0 files=0 checked=1 md=0
+  local fails=0 warns=0 files=0 checked=1 md=0 baseline=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --fails) fails="${2:-0}"; shift 2 ;;
@@ -65,6 +65,7 @@ record() {
       --files) files="${2:-0}"; shift 2 ;;
       --checked) checked="${2:-1}"; shift 2 ;;
       --md) md="${2:-0}"; shift 2 ;;
+      --baseline) baseline="${2:-0}"; shift 2 ;;
       *) shift ;;
     esac
   done
@@ -75,8 +76,10 @@ record() {
   # 只记数字与事实，不记 AI 的任何自述。
   # checked=0 表示"这轮没跑 lint"（没改 keel 的 md）——分母里有它，
   # 分子里没有它，于是"没被检查"不会伪装成"检查通过"（v3.3.2 修正）。
-  printf '%s\tcommit=%s\tchecked=%s\tfails=%s\twarns=%s\tfiles=%s\tmd=%s\n' \
-    "$ts" "$commit" "$checked" "$fails" "$warns" "$files" "$md" >> "$VIO"
+  # baseline=1 表示"这是初始化/换基线，不算违反轮次"（install.sh 装完会记一条）。
+  # 否则新用户第一次看报告，会被 50 个模板文件的初始化噪声吓到。
+  printf '%s\tcommit=%s\tchecked=%s\tfails=%s\twarns=%s\tfiles=%s\tmd=%s\tbaseline=%s\n' \
+    "$ts" "$commit" "$checked" "$fails" "$warns" "$files" "$md" "$baseline" >> "$VIO"
 }
 
 # ── report：出报告 ──────────────────────────────────────────────
@@ -110,21 +113,34 @@ report() {
   # 一次 awk 算完：轮次、命中轮次、累计 fails/warns/files
   local agg
   agg=$(awk -F'\t' '
-    { rounds++
+    # baseline 轮次（初始化/换基线）不计入分母——它不是"一次工作"，是"装了个模板"。
+    # 写法上刻意用最朴素的 if：早先试过三元表达式和 next+块 两种写法，
+    # 都在部分 awk 实现上直接语法报错（且报错信息指向上面那行，看不出真正原因）。
+    {
+      rbl = match($0, /baseline=1/)
+      if (rbl > 0) { baselines++; next }
+
+      rounds++
       # 老记录没有 checked 字段（v3.3.1 及之前）——按"已检查"处理，保持连续性
       ck = 1
-      if (match($0, /checked=[01]/)) ck = substr($0, RSTART+8, 1) + 0
-      if (ck) checked++
+      r = match($0, /checked=[01]/)
+      if (r > 0) ck = substr($0, RSTART + 8, 1) + 0
+      if (ck > 0) checked++
+
       f = 0
-      if (match($0, /fails=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6)+0; tf += v; if (v > 0) f = 1 }
-      if (match($0, /warns=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6)+0; tw += v }
-      if (match($0, /files=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6)+0; tfz += v }
-      if (f) violating++
+      r = match($0, /fails=[0-9]+/)
+      if (r > 0) { v = substr($0, RSTART + 6, RLENGTH - 6) + 0; tf += v; if (v > 0) f = 1 }
+      r = match($0, /warns=[0-9]+/)
+      if (r > 0) { v = substr($0, RSTART + 6, RLENGTH - 6) + 0; tw += v }
+      r = match($0, /files=[0-9]+/)
+      if (r > 0) { v = substr($0, RSTART + 6, RLENGTH - 6) + 0; tfz += v }
+
+      if (f > 0) violating++
     }
-    END { printf "%d %d %d %d %d %d", rounds, checked, violating, tf, tw, tfz }
+    END { printf "%d %d %d %d %d %d %d", rounds, checked, violating, tf, tw, tfz, baselines + 0 }
   ' "$VIO")
   set -- $agg
-  local rounds="$1" checked="$2" violating="$3" tfails="$4" twarns="$5" tfiles="$6"
+  local rounds="$1" checked="$2" violating="$3" tfails="$4" twarns="$5" tfiles="$6" baselines="$7"
 
   # 遵守率 = 1 − (被拦截的轮次 + 事后被回滚的提交) / 总轮次
   #
@@ -134,9 +150,12 @@ report() {
   #   都是这一轮没有产出可接受的结果。放行后回滚甚至更严重：
   #   它先是骗过了门禁，之后才被推翻。
   local viol_total=$((violating + reverts))
-  local rate="n/a"
+  # rate 在 JSON 里必须是合法 null，不能是字符串 "n/a"——否则 jq / node -e 之类
+  # 的消费者会解析失败（实测发现：手写 JSON 很容易漏这一点）
+  local rate_json="null" rate_txt="—"
   if [ "$rounds" -gt 0 ]; then
-    rate=$(awk -v v="$viol_total" -v r="$rounds" 'BEGIN { printf "%.1f", (1 - v/r) * 100 }')
+    rate_json=$(awk -v v="$viol_total" -v r="$rounds" 'BEGIN { printf "%.1f", (1 - v/r) * 100 }')
+    rate_txt="${rate_json}%"
   fi
 
   # 预算超限率（调研报告 §5.2）：测的是"上下文基座够不够用"，与遵守率正相关
@@ -155,7 +174,7 @@ report() {
     printf '{"rounds":%s,"checked":%s,"coverage":%s,"violating":%s,"reverted":%s,"violationsTotal":%s,"rate":%s,"totalFails":%s,"totalWarns":%s,"filesTotal":%s,"filesAvg":%s,"loadOverRate":%s}\n' \
       "$rounds" "$checked" \
       "$( [ "$rounds" -gt 0 ] && awk -v c="$checked" -v r="$rounds" 'BEGIN{printf "%.1f", c/r*100}' || echo "null" )" \
-      "$violating" "$reverts" "$viol_total" "$rate" "$tfails" "$twarns" "$tfiles" \
+      "$violating" "$reverts" "$viol_total" "$rate_json" "$tfails" "$twarns" "$tfiles" \
       "$( [ "$rounds" -gt 0 ] && awk -v f="$tfiles" -v r="$rounds" 'BEGIN{printf "%.1f", f/r}' || echo 0 )" \
       "$( [ "$over_n" -gt 0 ] && awk -v o="$over_r" -v n="$over_n" 'BEGIN{printf "%.1f", o/n*100}' || echo "null" )"
     return 0
@@ -168,7 +187,8 @@ report() {
   echo "  ├ lint 命中被拦    : $violating"
   echo "  └ 放行后被回滚     : $reverts   ← lint 看不见的那一类"
   echo "  违反合计（分子）   : $viol_total"
-  echo "  遵守率             : ${rate}%"
+  echo "  遵守率             : ${rate_txt}"
+  [ "$baselines" -gt 0 ] && echo "  （另有 $baselines 条基线记录已排除：装模板/换基线，不算工作轮次）"
   echo "  累计 ❌ / ⚠️       : $tfails / $twarns"
   echo "  平均每轮改动文件    : $( [ "$rounds" -gt 0 ] && awk -v f="$tfiles" -v r="$rounds" 'BEGIN{printf "%.1f", f/r}' || echo 0 ) 个"
   if [ -s "$LOAD" ]; then

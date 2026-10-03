@@ -77,6 +77,13 @@ jobs:
           echo "$out" | grep -q '"reverted":1' || { echo "❌ 回滚数未计入"; exit 1; }
           echo "$out" | grep -q '"rate":0.0'   || { echo "❌ 遵守率算错（预期 0.0）"; exit 1; }
           echo "✅ 遵守率口径正确（lint 命中 + 回滚 计入分子）"
+          # 基线轮次必须被排除：否则"装模板"会被算成一次工作轮次
+          bash keel/checks/compliance.sh record --baseline 1 --checked 0 --fails 0 --warns 0 --files 0 --md 0
+          bl=$(bash keel/checks/compliance.sh report --json)
+          echo "仅基线时: $bl"
+          echo "$bl" | grep -q '"rounds":0' || { echo "❌ 基线未被排除（rounds 应为 0）"; exit 1; }
+          echo "$bl" | grep -q '"rate":null' || { echo "❌ rate 不是合法 JSON null"; exit 1; }
+          echo "✅ 基线排除 + JSON 合法性"
           bash keel/checks/compliance.sh reset
 
       # 项目自定的扩展检查（keel/checks/rules.md 里声明的命令）
