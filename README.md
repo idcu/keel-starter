@@ -2,7 +2,7 @@
 
 [![keel-starter CI](https://github.com/idcu/keel-starter/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel-starter/actions/workflows/keel.yml)
 [![keel CI](https://github.com/idcu/keel/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel/actions/workflows/keel.yml)
-[![keel-version](https://img.shields.io/badge/keel--version-3.3.4-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
+[![keel-version](https://img.shields.io/badge/keel--version-3.3.5-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
 
 > 徽章指向 GitHub 镜像（Gitee 无标准徽章端点）。**发布仓**徽章是产品健康度，**项目仓**徽章守的是
 > "设计稿与脚本不许漂移"这条不变量——两者的关系与镜像同步的有序性见设计稿 §12.3。
@@ -29,7 +29,7 @@ bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) <你�
 脚本会把三步打给你。
 
 已 clone 下来了就直接 `bash install.sh <项目根>`；
-**要固定版本**加 `--ref`（`--ref v3.3.4` 或 `--ref=v3.3.4` 都行）——
+**要固定版本**加 `--ref`（`--ref v3.3.5` 或 `--ref=v3.3.5` 都行）——
 指定了版本拉不到就会**报错并列出可用版本**，不会偷偷给你装 `main`。
 项目里已有 `keel/` 时它走**就地升级**——只补工具链与缺失目录，不覆盖你的
 `INDEX.md` / `NOW.md` / `pitfalls/` / `decisions/`（设计稿 §12.3：升级按字段增量合并）。
@@ -97,6 +97,8 @@ bash keel/checks/install-hooks.sh         # 装钩子（每人 clone 后跑一�
 bash keel/checks/verify-hooks.sh          # 钩子"验谎"：本体可执行 + 挂载点正确（CI 加 --allow-unset）
 bash keel/checks/load-estimate.sh 关键词   # 本轮要读多少字节？超预算即非零退出（§8 协议第 4 条）
 bash keel/checks/keel-lite.sh keel        # 裁掉按需层成最小集（默认 dry-run，--apply 才动手）
+bash keel/checks/compliance.sh report     # 遵守率 + 存量合规率（§11.2 / ADR 0009 / ADR 0011）
+bash keel/checks/compliance.sh backfill --max 10   # 回填历史提交（出"存量合规率"；先加 --dry 看会跑几个）
 python3 keel/checks/mcp/keel-mcp-server.py --self-test   # MCP 只读服务自测（8 项）
 bash keel/checks/check-mcp-config.sh      # 已声明的 MCP server 是否可达（未声明即正常）
 ```

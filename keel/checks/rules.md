@@ -40,7 +40,8 @@ keywords: [校验, 规则, 扩展检查, CI]
 | `checks/load-estimate.sh <关键词>` | 按 §7.2 口径算本轮加载量，超 `BYTES_SESSION` 即非零退出 | 每轮检索时（§8 协议第 4 条的可执行形式） |
 | `checks/keel-lite.sh [keel目录] --apply` | 裁掉按需层成最小集，并剥离 INDEX 里对应路由行 | 小项目第 0 天（§12.1） |
 | `checks/mcp/keel-mcp-server.py` | MCP 只读服务：把 INDEX / CONSTITUTION / NOW 暴露成 resource | 支持 MCP 的客户端（§4.4） |
-| `checks/compliance.sh report` | 遵守率（§11.2 / ADR 0009）：由 pre-commit 自动记录，report 只读 | 双周回顾（§11） |
+| `checks/compliance.sh report` | 遵守率 + 存量合规率（§11.2 / ADR 0009 / ADR 0011）：由 pre-commit 自动记录，report 只读 | 双周回顾（§11） |
+| `checks/compliance.sh backfill [--max N] [--dry]` | 回填历史提交，出"存量合规率"（**不是遵守率**，ADR 0011） | 刚装完的第一天 |
 | `checks/check-mcp-config.sh` | 校验已声明的 MCP server 可达（未声明不算缺陷，恒 exit 0） | 接入语义检索后 · CI（§9.5） |
 
 ## 与内核的分工
