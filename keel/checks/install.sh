@@ -21,12 +21,16 @@ TARGET=""
 # 参数解析：**用 while + shift 逐个取**，不要写 `for a in "$@"` 里带 shift 的写法——
 # 那样会在遍历途中改掉 "$@"，实测 `install.sh <根> --ref v3.2.0` 会把 "v3.2.0"
 # 当成项目根（"❌ 目录不存在: v3.2.0"）。教训同 §7：集合被遍历时不要改它。
+#
+# EXPLICIT_REF 必须在这里（循环内）置位：循环用 shift 消耗参数，结束后 "$*"
+# 已空，那时再回头判断 " $* " 永远匹配不到——实测 --ref=v9.9.9 仍静默装了 main。
+EXPLICIT_REF=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --ref)
       [ $# -ge 2 ] || { echo "❌ --ref 后面要跟版本号或分支名"; exit 2; }
-      REF="$2"; shift 2 ;;
-    --ref=*) REF="${1#--ref=}"; shift ;;
+      REF="$2"; EXPLICIT_REF=1; shift 2 ;;
+    --ref=*) REF="${1#--ref=}"; EXPLICIT_REF=1; shift ;;
     -*) echo "❌ 未知参数: $1"; exit 2 ;;
     *)
       [ -z "$TARGET" ] || { echo "❌ 只能给一个项目根（多了: $1）"; exit 2; }
@@ -50,15 +54,12 @@ echo "── 1. 取模板"
 # 显式指定 --ref 时，拉不到就**报错**，不静默回落到 main——
 # 用户以为自己固定了版本，实际拿到别的东西，比直接失败更坏。
 # 只有默认（未指定 --ref）才允许回落，那是"跟随最新版"的本意。
-# 两种写法都算显式指定：--ref v1 或 --ref=v1
-EXPLICIT_REF=0
-case " $* " in *" --ref "*|*" --ref="*) EXPLICIT_REF=1 ;; esac
-
 if ! git clone --depth 1 --branch "$REF" "$REPO" "$tmp/starter" 2>/dev/null; then
   if [ "$EXPLICIT_REF" -eq 1 ]; then
     echo "❌ 拉取失败：$REPO 的 '$REF' 不存在（或该地址不是可 clone 的 git 仓库）"
     echo "   可用版本："
-    git ls-remote --tags "$REPO" 2>/dev/null | sed 's#.*refs/tags/#     #' | tail -5 | sed 's/^/     /'
+    # 去掉 ^{}（那是 annotated tag 的 peeled ref，用户不需要看到）
+    git ls-remote --tags "$REPO" 2>/dev/null | grep -v '\^{}' | sed 's#.*refs/tags/#   #' | tail -5
     echo "   也可去掉 --ref 跟随最新版（不推荐：版本会随 main 变动）"
     exit 2
   fi
