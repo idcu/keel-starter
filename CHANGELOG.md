@@ -4,6 +4,34 @@
 升级按该字段增量合并，**不允许"一键覆盖"**（设计稿 §12.3）。
 本仓是发布仓：改动先在此发布，再更新项目仓里的子模块指针。
 
+## 3.3.6 — 2026-10-03
+
+**修 v3.3.5 刚发布的 `backfill`：在带子模块的仓库里，每个提交都假报 1 条死链。**
+
+### 子模块不会被 worktree 检出
+
+`git worktree add` **不检出子模块**，于是子模块目录是空的；
+任何指向子模块内部文件的链接（本项目实例就是 `../keel-starter/keel/INDEX.md`）
+都会被判死链。实测：项目仓 12 个提交**每个都恰好 ❌ 1**，整齐得不正常——
+**"整齐"本身就是假 fail 的特征**。
+
+修法：回填时把 `.gitmodules` 里声明的子模块从当前工作树复制进临时 worktree。
+填的是**占位**（让链接可解析），不是结论——死链判的是"文件在不在"。
+
+连同 v3.3.5 一起发现的另外两个成因已并入坑条目
+`meta/worktree-eol-differs-from-main.md`：行尾 CRLF、lint 传绝对路径入参。
+
+> 三处都是同一类教训：**机器造出来的数，错了不会报错**。
+> 所以 `backfill` 这类路径必须先用"已知干净"的提交做对照，确认是 0 再信它。
+
+### 升级验收
+
+```bash
+bash keel/checks/keel-lint.sh keel
+bash keel/checks/test-lint.sh                    # 38/38
+bash keel/checks/compliance.sh backfill --max 2  # 已知干净的提交：❌ 应为 0
+```
+
 ## 3.3.5 — 2026-10-03
 
 **新增 `compliance.sh backfill`：装完第一天就能看到第一个数。**

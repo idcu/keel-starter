@@ -306,6 +306,18 @@ backfill() {
     # 用**当前**的预算真源覆盖临时工作树里的那一份（只影响临时目录，不动历史）。
     cp "$KEEL_DIR/checks/budget.env" "$wt/keel/checks/budget.env" 2>/dev/null || true
 
+    # 子模块**不会**被 worktree 检出，指向子模块内部文件的链接会全部假报死链
+    # （实测：项目仓 INDEX.md 指向 ../keel-starter/keel/INDEX.md，每个提交都报 1 条）。
+    # 用当前工作树里那份填上——死链判的是"文件在不在"，填的是占位而非结论。
+    if [ -f "$proj/.gitmodules" ]; then
+      sm_paths=$(git -C "$proj" config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null | sed 's/^[^ ]* //')
+      for sm in $sm_paths; do
+        [ -d "$proj/$sm" ] || continue
+        mkdir -p "$wt/$(dirname "$sm")" 2>/dev/null
+        cp -R "$proj/$sm" "$wt/$(dirname "$sm")/" 2>/dev/null || true
+      done
+    fi
+
     # 入参必须传**相对**的 `keel` 并在 $wt 里跑：lint 的目录入参是按 cwd 解析的，
     # 传绝对路径会让所有文档被判成孤儿（实测 27 条假 fail → 传相对路径是 0）。
     # 与坑库 `install-verifies-wrong-dir.md` 同一类：路径入参 + cwd 必须同时对。
