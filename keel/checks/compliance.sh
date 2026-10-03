@@ -41,7 +41,10 @@
 #   3. **没有基线就没有意义**。第一次跑出来的数字别当成绩。
 set -uo pipefail
 
-KEEL_DIR="keel"
+# 从**脚本自身位置**推 KEEL_DIR，不要写死相对路径 "keel"：
+# 本脚本会被别的脚本以不同 cwd 调用（install.sh 从任意目录调它），
+# 写死相对路径会让它误报"不像 keel 目录"——实测在 install.sh 第 3 步就是这么错的。
+KEEL_DIR="${KEEL_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 [ -d "$KEEL_DIR/checks" ] || { echo "❌ 不像 keel 目录（缺 $KEEL_DIR/checks）"; exit 1; }
 . "$KEEL_DIR/checks/budget.env" 2>/dev/null || true
 

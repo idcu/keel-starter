@@ -28,6 +28,25 @@ jobs:
       - name: 检索增强接入位（未声明即正常，恒 exit 0）
         run: bash keel/checks/check-mcp-config.sh
 
+      # 版本声明与可获取必须一致：keel-version 写了、CHANGELOG 写了，
+      # 但**没有 tag** 的话，用户 `--ref v3.3.4` 直接拉不到（v3.2–v3.3 期间就是这样）。
+      # 这条检查守的正是 README 里那句"两者一致"。
+      - name: 版本号与 tag 一致
+        run: |
+          set -uo pipefail
+          v=$(grep '^keel-version:' keel/INDEX.md | sed 's/.*:[[:space:]]*//;s/[[:space:]]*#.*//')
+          echo "keel-version = $v"
+          [ -n "$v" ] || { echo "❌ 读不到 keel-version"; exit 1; }
+          if git rev-parse "v$v" >/dev/null 2>&1; then
+            echo "✅ tag v$v 存在"
+          else
+            echo "❌ 版本 $v 声明了但没有 tag v$v —— 用户无法固定该版本"
+            echo "   修法: git tag -a v$v -m v$v && git push origin v$v"
+            exit 1
+          fi
+          # CHANGELOG 必须有该版本的小节
+          grep -qE "^## $v —" CHANGELOG.md || { echo "❌ CHANGELOG.md 缺 $v 小节"; exit 1; }
+
       # ── 分发入口冒烟（v3.3.1 新增）────────────────────────────────
       # 为什么必须测：install.sh 是用户接触 Keel 的**第一条命令**，
       # 而前面那些步骤全是在 starter 仓内自检——**装到别的项目里能不能用，

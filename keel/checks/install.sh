@@ -18,19 +18,19 @@ REPO="https://gitee.com/idcu/keel-starter.git"
 REF="main"
 TARGET=""
 
-for a in "$@"; do
-  case "$a" in
-    --ref) shift ;;
-    --ref=*) REF="${a#--ref=}" ;;
-    -*) echo "❌ 未知参数: $a"; exit 2 ;;
-    *) TARGET="$a" ;;
-  esac
-done
-# --ref 的值可能是下一个位置参数
+# 参数解析：**用 while + shift 逐个取**，不要写 `for a in "$@"` 里带 shift 的写法——
+# 那样会在遍历途中改掉 "$@"，实测 `install.sh <根> --ref v3.2.0` 会把 "v3.2.0"
+# 当成项目根（"❌ 目录不存在: v3.2.0"）。教训同 §7：集合被遍历时不要改它。
 while [ $# -gt 0 ]; do
   case "$1" in
-    --ref) REF="${2:-main}"; shift 2 ;;
-    *) shift ;;
+    --ref)
+      [ $# -ge 2 ] || { echo "❌ --ref 后面要跟版本号或分支名"; exit 2; }
+      REF="$2"; shift 2 ;;
+    --ref=*) REF="${1#--ref=}"; shift ;;
+    -*) echo "❌ 未知参数: $1"; exit 2 ;;
+    *)
+      [ -z "$TARGET" ] || { echo "❌ 只能给一个项目根（多了: $1）"; exit 2; }
+      TARGET="$1"; shift ;;
   esac
 done
 
@@ -47,14 +47,28 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 echo "keel-install · 目标=$TARGET · ref=$REF · 模式=$([ "$EXISTING" -eq 1 ] && echo '就地升级（保留你的内容）' || echo '全新安装')"
 
 echo "── 1. 取模板"
+# 显式指定 --ref 时，拉不到就**报错**，不静默回落到 main——
+# 用户以为自己固定了版本，实际拿到别的东西，比直接失败更坏。
+# 只有默认（未指定 --ref）才允许回落，那是"跟随最新版"的本意。
+# 两种写法都算显式指定：--ref v1 或 --ref=v1
+EXPLICIT_REF=0
+case " $* " in *" --ref "*|*" --ref="*) EXPLICIT_REF=1 ;; esac
+
 if ! git clone --depth 1 --branch "$REF" "$REPO" "$tmp/starter" 2>/dev/null; then
-  # 分支不存在时回落到默认分支 + 提示
+  if [ "$EXPLICIT_REF" -eq 1 ]; then
+    echo "❌ 拉取失败：$REPO 的 '$REF' 不存在（或该地址不是可 clone 的 git 仓库）"
+    echo "   可用版本："
+    git ls-remote --tags "$REPO" 2>/dev/null | sed 's#.*refs/tags/#     #' | tail -5 | sed 's/^/     /'
+    echo "   也可去掉 --ref 跟随最新版（不推荐：版本会随 main 变动）"
+    exit 2
+  fi
+  # 未指定 --ref：分支名可能不存在（默认是 main），回落即可
   if ! git clone --depth 1 "$REPO" "$tmp/starter" 2>/dev/null; then
     echo "❌ 拉取失败: $REPO"
     echo "   也可手工下载后运行: bash install.sh <项目根>"
     exit 2
   fi
-  echo "   ⚠️  ref '$REF' 不存在，已用默认分支（可用 --ref 指定 tag）"
+  echo "   ⚠️  '$REF' 不是分支/tag，已用默认分支"
 fi
 [ -d "$tmp/starter/keel" ] || { echo "❌ 仓库里没有 keel/ 目录，不是 keel-starter"; exit 2; }
 

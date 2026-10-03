@@ -2,7 +2,7 @@
 
 [![keel-starter CI](https://github.com/idcu/keel-starter/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel-starter/actions/workflows/keel.yml)
 [![keel CI](https://github.com/idcu/keel/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel/actions/workflows/keel.yml)
-[![keel-version](https://img.shields.io/badge/keel--version-3.3.3-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
+[![keel-version](https://img.shields.io/badge/keel--version-3.3.4-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
 
 > 徽章指向 GitHub 镜像（Gitee 无标准徽章端点）。**发布仓**徽章是产品健康度，**项目仓**徽章守的是
 > "设计稿与脚本不许漂移"这条不变量——两者的关系与镜像同步的有序性见设计稿 §12.3。
@@ -15,6 +15,10 @@ Keel 的模板仓库。它要解决的问题只有一句：
 做法不是"把文档写全"，而是把成本从**总量**挪到**单次**：
 内容可以长到 1GB，但每次会话的固定加载量恒定在 **≤5k token**（约 1.9k 是必读部分）。
 
+> **tag 说明**：版本号有两处真源——`keel/INDEX.md` 的 `keel-version` 与本仓的
+> `vX.Y.Z` tag。两者一致（CI 与发布流程保证），`--ref` 认的是 **tag**。
+> 没有 tag 的版本等于不存在：声明了但拉不到。
+
 ## 一条命令装上
 
 ```bash
@@ -24,7 +28,9 @@ bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) <你�
 装完还差三步（**缺任一步，这套系统等于不存在**）：贴锚点、填自己的内容、小项目先裁剪。
 脚本会把三步打给你。
 
-已 clone 下来了就直接 `bash install.sh <项目根> --ref v3.2.0`；
+已 clone 下来了就直接 `bash install.sh <项目根>`；
+**要固定版本**加 `--ref`（`--ref v3.3.4` 或 `--ref=v3.3.4` 都行）——
+指定了版本拉不到就会**报错并列出可用版本**，不会偷偷给你装 `main`。
 项目里已有 `keel/` 时它走**就地升级**——只补工具链与缺失目录，不覆盖你的
 `INDEX.md` / `NOW.md` / `pitfalls/` / `decisions/`（设计稿 §12.3：升级按字段增量合并）。
 
