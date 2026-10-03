@@ -57,12 +57,14 @@ shift 2>/dev/null || true
 # ── record：记一轮 ──────────────────────────────────────────────
 # 参数（由 pre-commit 传入）：--fails N --warns N --files N
 record() {
-  local fails=0 warns=0 files=0
+  local fails=0 warns=0 files=0 checked=1 md=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --fails) fails="${2:-0}"; shift 2 ;;
       --warns) warns="${2:-0}"; shift 2 ;;
       --files) files="${2:-0}"; shift 2 ;;
+      --checked) checked="${2:-1}"; shift 2 ;;
+      --md) md="${2:-0}"; shift 2 ;;
       *) shift ;;
     esac
   done
@@ -70,9 +72,11 @@ record() {
   local ts commit
   ts=$(date '+%Y-%m-%dT%H:%M:%S%z')
   commit=$(git rev-parse --short HEAD 2>/dev/null || echo "-")
-  # 只记数字与事实，不记 AI 的任何自述
-  printf '%s\tcommit=%s\tfails=%s\twarns=%s\tfiles=%s\n' \
-    "$ts" "$commit" "$fails" "$warns" "$files" >> "$VIO"
+  # 只记数字与事实，不记 AI 的任何自述。
+  # checked=0 表示"这轮没跑 lint"（没改 keel 的 md）——分母里有它，
+  # 分子里没有它，于是"没被检查"不会伪装成"检查通过"（v3.3.2 修正）。
+  printf '%s\tcommit=%s\tchecked=%s\tfails=%s\twarns=%s\tfiles=%s\tmd=%s\n' \
+    "$ts" "$commit" "$checked" "$fails" "$warns" "$files" "$md" >> "$VIO"
 }
 
 # ── report：出报告 ──────────────────────────────────────────────
@@ -107,16 +111,20 @@ report() {
   local agg
   agg=$(awk -F'\t' '
     { rounds++
+      # 老记录没有 checked 字段（v3.3.1 及之前）——按"已检查"处理，保持连续性
+      ck = 1
+      if (match($0, /checked=[01]/)) ck = substr($0, RSTART+8, 1) + 0
+      if (ck) checked++
       f = 0
-      if (match($0, /fails=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6); tf += v; if (v+0 > 0) f = 1 }
-      if (match($0, /warns=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6); tw += v }
-      if (match($0, /files=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6); tfz += v }
+      if (match($0, /fails=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6)+0; tf += v; if (v > 0) f = 1 }
+      if (match($0, /warns=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6)+0; tw += v }
+      if (match($0, /files=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6)+0; tfz += v }
       if (f) violating++
     }
-    END { printf "%d %d %d %d %d", rounds, violating, tf, tw, tfz }
+    END { printf "%d %d %d %d %d %d", rounds, checked, violating, tf, tw, tfz }
   ' "$VIO")
   set -- $agg
-  local rounds="$1" violating="$2" tfails="$3" twarns="$4" tfiles="$5"
+  local rounds="$1" checked="$2" violating="$3" tfails="$4" twarns="$5" tfiles="$6"
 
   # 遵守率 = 1 − (被拦截的轮次 + 事后被回滚的提交) / 总轮次
   #
@@ -136,7 +144,7 @@ report() {
   if [ -s "$LOAD" ]; then
     set -- $(awk -F'\t' '
       { n++
-        if (match($0, /bytes=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6); s += v; if (v > max) max = v }
+        if (match($0, /bytes=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6)+0; s += v; if (v > max) max = v }
         if (match($0, /over=[01]/)) { if (substr($0, RSTART+5, 1) == "1") o++ }
       }
       END { printf "%d %d %d", n+0, o+0, (n>0 ? s/n : 0) }' "$LOAD")
@@ -144,15 +152,19 @@ report() {
   fi
 
   if [ "$as_json" -eq 1 ]; then
-    printf '{"rounds":%s,"violating":%s,"reverted":%s,"violationsTotal":%s,"rate":%s,"totalFails":%s,"totalWarns":%s,"filesTotal":%s,"filesAvg":%s,"loadOverRate":%s}\n' \
-      "$rounds" "$violating" "$reverts" "$viol_total" "$rate" "$tfails" "$twarns" "$tfiles" \
+    printf '{"rounds":%s,"checked":%s,"coverage":%s,"violating":%s,"reverted":%s,"violationsTotal":%s,"rate":%s,"totalFails":%s,"totalWarns":%s,"filesTotal":%s,"filesAvg":%s,"loadOverRate":%s}\n' \
+      "$rounds" "$checked" \
+      "$( [ "$rounds" -gt 0 ] && awk -v c="$checked" -v r="$rounds" 'BEGIN{printf "%.1f", c/r*100}' || echo "null" )" \
+      "$violating" "$reverts" "$viol_total" "$rate" "$tfails" "$twarns" "$tfiles" \
       "$( [ "$rounds" -gt 0 ] && awk -v f="$tfiles" -v r="$rounds" 'BEGIN{printf "%.1f", f/r}' || echo 0 )" \
       "$( [ "$over_n" -gt 0 ] && awk -v o="$over_r" -v n="$over_n" 'BEGIN{printf "%.1f", o/n*100}' || echo "null" )"
     return 0
   fi
 
   echo "compliance · 遵守率（ADR 0009 · 口径见设计稿 §11.2）"
-  echo "  检查轮次（分母）   : $rounds"
+  echo "  提交轮次（分母）   : $rounds"
+  echo "  ├ 其中跑过 lint    : $checked（覆盖 $( [ "$rounds" -gt 0 ] && awk -v c="$checked" -v r="$rounds" 'BEGIN{printf "%.0f", c/r*100}' || echo 0 )%）"
+  echo "  └ 未跑（没改 md）  : $((rounds - checked))  ← 这些不算"通过"，只算"未检查""
   echo "  ├ lint 命中被拦    : $violating"
   echo "  └ 放行后被回滚     : $reverts   ← lint 看不见的那一类"
   echo "  违反合计（分子）   : $viol_total"
@@ -161,18 +173,21 @@ report() {
   echo "  平均每轮改动文件    : $( [ "$rounds" -gt 0 ] && awk -v f="$tfiles" -v r="$rounds" 'BEGIN{printf "%.1f", f/r}' || echo 0 ) 个"
   if [ -s "$LOAD" ]; then
     echo "  ── 单轮加载量（load-estimate.sh 口径 · 预算 ${BYTES_SESSION:-15000}）"
-    awk -F'\t' '{ if (match($0, /bytes=[0-9]+/)) { v=substr($0,RSTART+6,RLENGTH-6); s+=v; n++; if (v>max) max=v } }
+    awk -F'\t' '{ if (match($0, /bytes=[0-9]+/)) { v=substr($0,RSTART+6,RLENGTH-6)+0; s+=v; n++; if (v>max) max=v } }
          END { if (n>0) printf "    已记录 %d 轮 · 平均 %d 字节 · 峰值 %d 字节\n", n, s/n, max }' "$LOAD"
     if [ "$over_n" -gt 0 ]; then
       echo "    超限率 $over_r/$over_n 轮 = $(awk -v o="$over_r" -v n="$over_n" 'BEGIN{printf "%.1f", o/n*100}')%"
     fi
   fi
   echo
-  echo "  ⚠️ 读数字之前先读这四条："
+  echo "  ⚠️ 读数字之前先读这五条："
   echo "     1. 遵守率低**先查规则是否可遵守**（§2 原则 4），不是先怪 AI"
-  echo "     2. 它只量「提交时的合规」，没提交的工作不计入"
+  echo "     2. 看遵守率**必须同时看覆盖率**：覆盖率低时高分没有意义"
+  echo "        （未检查的提交计入分母但不计入分子，会把数字压低而非抬高——"
+  echo "         所以真正的风险是「覆盖率低 + 遵守率高」= 大量提交根本没被检查）"
   echo "     3. 回滚数高 → 多半是**门禁放行了不该放的东西**（不是 AI 不听话）"
-  echo "     4. 没有基线就没有意义——第一次的数字别当成绩"
+  echo "     4. 它只量「提交时的合规」，没提交的工作不计入"
+  echo "     5. 没有基线就没有意义——第一次的数字别当成绩"
 }
 
 # ── reset：清空 ─────────────────────────────────────────────────
