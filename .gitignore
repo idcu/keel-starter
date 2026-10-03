@@ -5,3 +5,6 @@ DESIGN.md
 
 # keel-lite.sh 裁剪 INDEX.md 时留下的备份（确认无误后自行删除）
 *.keelbak
+
+# 遵守率指标数据（§11.2 / ADR 0009）：每台机器的本地观测历史，不进版本库
+keel/checks/.metrics/

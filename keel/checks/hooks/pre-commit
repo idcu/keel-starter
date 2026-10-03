@@ -10,10 +10,32 @@ KEEL_DIR="keel"
 changed=$(git diff --cached --name-only | grep -E "^${KEEL_DIR}/.*\.md$" || true)
 [ -z "$changed" ] && exit 0
 
-echo "keel: keel/ 下有 md 变更，跑一致性校验…"
-if ! bash "$KEEL_DIR/checks/keel-lint.sh" "$KEEL_DIR"; then
+nfiles=$(printf '%s\n' "$changed" | wc -l | tr -d '[:space:]')
+echo "keel: keel/ 下有 $nfiles 个 md 变更，跑一致性校验…"
+
+# 记一轮**客观事实**给遵守率用（§11.2 / ADR 0009）：
+#   fails / warns 从 lint 的真实输出数出来，files 来自 git diff --cached。
+# 三个数字都不经过 AI，所以 AI 改不了它们。
+# 注意：先记再判成败——**故意违规的那次也要留痕**，
+# 否则"刻意绕过"会变成指标上的盲区，而那恰恰最该被看见。
+lintout=$(bash "$KEEL_DIR/checks/keel-lint.sh" "$KEEL_DIR" 2>&1)
+rc=$?
+nfails=$(printf '%s\n' "$lintout" | grep -c '❌' || true)
+nwarns=$(printf '%s\n' "$lintout" | grep -c '⚠️' || true)
+
+if [ -f "$KEEL_DIR/checks/compliance.sh" ]; then
+  bash "$KEEL_DIR/checks/compliance.sh" record \
+    --fails "$nfails" --warns "$nwarns" --files "$nfiles" 2>/dev/null || true
+fi
+
+if [ "$rc" -ne 0 ]; then
+  printf '%s\n' "$lintout" | grep -E '❌|⚠️' | head -20
   echo
   echo "❌ keel-lint 未通过，提交已拦下。"
   echo "   修完再提交；确实要绕过用 git commit --no-verify，并在 NOW.md 的阻塞表记一笔原因。"
+  echo "   （本次已记入遵守率：fails=$nfails warns=$nwarns —— 绕过不会让它消失）"
   exit 1
 fi
+
+printf '%s\n' "$lintout" | grep -E '⚠️' | head -5 || true
+exit 0
