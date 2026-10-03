@@ -23,15 +23,39 @@ KEEL=$(cd "$HERE/.." && pwd)
 BYTES_SESSION=${BYTES_SESSION:-15000}
 
 LIST=0
-kws=()
+# 关键词收集：**先扫一遍 "$@" 分类，再统一重排**。
+# 为什么不能边扫边 set --：set -- 会清空位置参数，正在进行的 for a in "$@"
+# 随即失去输入、循环体只跑一次，于是任何带关键词的调用都误报"用法"（实测踩过）。
+# 两趟法（先只读分类 → 再重排）规避了这个耦合，且在所有 bash 版本上行为一致。
+LIST=0; NKWS=0
 for a in "$@"; do
   case "$a" in
     --list) LIST=1 ;;
     -*) echo "❌ 未知参数: $a"; exit 2 ;;
-    *) kws+=("$a") ;;
+    *)
+      # 关键词含空白/引号会让"按词遍历"与"多 -e 传参"两处都失去边界，
+      # 与其静默匹配错的东西，不如显式拒收。
+      case "$a" in
+        *[[:space:]]*|*"'"*|*"\"") echo "❌ 关键词不能含空白或引号: $a"; exit 2 ;;
+      esac
+      NKWS=$((NKWS + 1)) ;;
   esac
 done
-[ "${#kws[@]}" -ge 1 ] || { echo "用法: bash keel/checks/load-estimate.sh <关键词> [更多关键词…] [--list]"; exit 2; }
+[ "$NKWS" -ge 1 ] || { echo "用法: bash keel/checks/load-estimate.sh <关键词> [更多关键词…] [--list]"; exit 2; }
+# 第二趟：只保留关键词（"$@" 里还有 --list，传给 grep 会当模式）。
+# 先把原参数快照进 args，**再** set -- —— set -- 会清空 "$@"，
+# 若边遍历边重建，循环体只跑一次（同一个坑，上面已踩过一次，这里用快照隔开）。
+args=""
+for a in "$@"; do
+  case "$a" in --list) ;; *) args="$args
+$a" ;; esac
+done
+# 用换行分隔保存（关键词已在上一步拒收含空白，故此处按行还原是安全的）
+OLDIFS=$IFS; IFS='
+'
+set --
+for a in $args; do set -- "$@" "$a"; done
+IFS=$OLDIFS
 
 b_of() { wc -c < "$1" 2>/dev/null | tr -d '[:space:]'; }
 
@@ -44,20 +68,25 @@ for f in "$KEEL"/NOW*.md; do
   n=$(b_of "$f"); fixed=$((fixed + n)); nows="$nows $f"
 done
 
-# 按需：grep -F 逐关键词 OR（-F 避免关键词里的正则元字符被误解析）
-args=()
-for k in "${kws[@]}"; do args+=(-e "$k"); done
-hits=$(grep -rlF "${args[@]}" "$KEEL" --include='*.md' \
-         --exclude-dir=archive --exclude-dir=NOW-history 2>/dev/null | sort -u || true)
-
+# 按需：逐文件判断是否命中任一关键词（grep -F 避免关键词里的正则元字符被误解析）。
+# 遍历全部 md 再逐个 grep，比 `grep -rlF -e k1 -e k2` 慢一点，但换来三个好处：
+#   ① 路径含空格不会拆错（find 逐行输出，IFS= read 保留整行）；
+#   ② 命中判定与字节累加在同一处，语义直白，不易写出"多关键词命中同一文件算两次"的错；
+#   ③ 不依赖 read -d / mapfile（bash 3.2 没有）。
 ondemand=0; listed=0
-for f in $hits; do
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
   case "$f" in
     "$KEEL/INDEX.md"|"$KEEL"/NOW*.md) continue ;;   # 已在固定成本里，不重复计
   esac
+  hit=0
+  for k in "$@"; do
+    if grep -qF -- "$k" "$f" 2>/dev/null; then hit=1; break; fi
+  done
+  [ "$hit" -eq 1 ] || continue
   n=$(b_of "$f"); ondemand=$((ondemand + n)); listed=$((listed + 1))
   [ "$LIST" -eq 1 ] && printf '      %6s  %s\n' "$n" "${f#"$KEEL"/}"
-done
+done < <(find "$KEEL" -name '*.md' -not -path '*/archive/*' -not -path '*/NOW-history/*' 2>/dev/null | sort)
 
 total=$((fixed + ondemand))
 echo "load-estimate · 目录=$KEEL · 预算（BYTES_SESSION）=$BYTES_SESSION 字节"

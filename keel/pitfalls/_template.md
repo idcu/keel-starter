@@ -1,14 +1,14 @@
 ---
 scope: <域：db / api / auth / finance / meta …>
-status: active          # active | distilled（已上提宪法） | archived（已失效，移入 archive/）
-severity: P2            # P0 资金/数据/安全或不可逆；P1 主流程阻断；P2 局部返工；P3 效率体验
+status: active          # active | distilled（已上提宪法） | archived（已移入 archive/）
+severity: P2            # P0 资金/数据/安全；P1 主流程阻断；P2 局部返工；P3 效率体验
 last-verified: 2026-09-30
 triggers: 0             # 每被触发一次 +1（commit-msg 钩子自动）；≥3 由 lint 提醒蒸馏
 keywords: [中英混合, 便于 grep 命中, 同义词也写进来]
 ---
 
 <!-- 三段式缺任一段即 lint fail。文件名必须是关键词，不能带日期、不能是大写。
-     复制本文件时：删掉本行注释，换掉文件名，并在 pitfalls/INDEX.md 加一行登记。 -->
+     复制时：删掉本行注释，换掉文件名，并在 pitfalls/INDEX.md 加一行登记。 -->
 
 ## 症状
 
@@ -20,5 +20,7 @@ keywords: [中英混合, 便于 grep 命中, 同义词也写进来]
 
 ## 正解
 
-- <能照着直接做的动作，不要写"注意一下"这种无法执行的话>
+- <能照着直接做的动作。判据：能照着这句话直接改代码吗？不能就重写>
 - <如果正解只有一句，就把这一句写狠一点>
+
+<!-- 「正解」写**具体动作**而非"不要那样做"——理由与改写示例见 ADR 0009。 -->

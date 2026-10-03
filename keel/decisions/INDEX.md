@@ -1,7 +1,7 @@
 ---
 scope: meta
 status: active
-last-verified: 2026-09-30
+last-verified: 2026-10-03
 keywords: [决策, ADR, 索引]
 ---
 
@@ -14,3 +14,5 @@ keywords: [决策, ADR, 索引]
 | 0005 | 闭环钩子"验谎"：lint 第 16 项 + verify-hooks.sh | active | [0005-verify-hooks.md](0005-verify-hooks.md) |
 | 0006 | 单轮加载量进预算真源（BYTES_SESSION）+ load-estimate.sh | active | [0006-session-load-budget.md](0006-session-load-budget.md) |
 | 0007 | 兑现 MCP 只读落点，并把语义检索做成接入位 | active | [0007-mcp-readonly-and-retrieval-slot.md](0007-mcp-readonly-and-retrieval-slot.md) |
+| 0008 | 把 lint 的 per-file fork 批量化（319s→97s），并给 lint 自身设时限预算 | active | [0008-batch-fork-and-time-budget.md](0008-batch-fork-and-time-budget.md) |
+| 0009 | 遵守率只测客观事实，不采信 AI 自报（全赛道无人实现此指标） | active | [0009-compliance-rate-objective-only.md](0009-compliance-rate-objective-only.md) |

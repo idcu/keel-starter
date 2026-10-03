@@ -2,7 +2,7 @@
 
 [![keel-starter CI](https://github.com/idcu/keel-starter/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel-starter/actions/workflows/keel.yml)
 [![keel CI](https://github.com/idcu/keel/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel/actions/workflows/keel.yml)
-[![keel-version](https://img.shields.io/badge/keel--version-3.1.1-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
+[![keel-version](https://img.shields.io/badge/keel--version-3.2.0-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
 
 > 徽章指向 GitHub 镜像（Gitee 无标准徽章端点）。**发布仓**徽章是产品健康度，**项目仓**徽章守的是
 > "设计稿与脚本不许漂移"这条不变量——两者的关系与镜像同步的有序性见设计稿 §12.3。
@@ -14,6 +14,24 @@ Keel 的模板仓库。它要解决的问题只有一句：
 
 做法不是"把文档写全"，而是把成本从**总量**挪到**单次**：
 内容可以长到 1GB，但每次会话的固定加载量恒定在 **≤5k token**（约 1.9k 是必读部分）。
+
+## 一条命令装上
+
+```bash
+bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) <你的项目根>
+```
+
+装完还差三步（**缺任一步，这套系统等于不存在**）：贴锚点、填自己的内容、小项目先裁剪。
+脚本会把三步打给你。
+
+已 clone 下来了就直接 `bash install.sh <项目根> --ref v3.2.0`；
+项目里已有 `keel/` 时它走**就地升级**——只补工具链与缺失目录，不覆盖你的
+`INDEX.md` / `NOW.md` / `pitfalls/` / `decisions/`（设计稿 §12.3：升级按字段增量合并）。
+
+**为什么不用 npm**（v3.2 实测）：`npm pack` 把 `keel/checks/hooks/` 从 `100755`
+打成 `644`，而 lint 第 13 项要求闭环钩子**存在且可执行**——从 npm 装出来开箱即 fail。
+git 天然记录权限位（`git ls-files -s` 显示 `100755`），clone 下来就是对的。
+本项目零编译零运行时，引入 node 依赖树换可发现性不划算。
 
 ## 五步上手（第 0 天）
 

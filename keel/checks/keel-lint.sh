@@ -22,6 +22,7 @@ MAX_DIR_FILES=20
 STALE_DAYS=30
 NOW_STALE_DAYS=7
 DISTILL_AT=3
+LINT_SECONDS=300                 # 工具自身的时限预算（ADR 0008）；超时只告警不 fail
 
 # §4.1 门外锚点原文（唯一允许存在于 Keel 之外的一句）
 ANCHOR='任何任务开始前，先读 keel/INDEX.md 与其中指向的 NOW.md，并遵守 INDEX.md 里的检索协议。'
@@ -51,96 +52,273 @@ yaml_val() { sed -E "s/^#.*$//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//"; }
 fm_val() { fm_block "$1" | grep -m1 "^$2:" | sed -E "s/^$2:[[:space:]]*//" | yaml_val; }
 to_epoch() { date -j -f "%Y-%m-%d" "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null || true; }
 
+# ---------- 性能：把 per-file 的 fork 批量化（v3.2）----------
+# 动因：实测 24 个文档的目录，单次 lint 要 319 秒（Windows / Git Bash）。
+# 根因不是检查本身复杂，而是**进程创建成本**——单次 fork 在该环境约 370ms，
+# 而原实现有 ~1500 次 per-file fork（wc×2、awk、grep、sed 各自单文件调用）。
+# 同样的检查用 xargs 批量做，实测 16.1s → 0.52s（31×）。
+# 做法：文件清单先落成一份 NUL 分隔的清单，再整体喂给 awk / wc。
+# 语义不变——同样的输入、同样的判据、同一套报错文案；只是把 N 次进程换成 1 次。
+
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 # 用临时文件收集结果：兼容 bash 3.2（case 不能直接出现在 $() 内），也避开管道子 shell 吞掉 fail 计数
 deadf="$tmp/dead"; refd="$tmp/refd"; longf="$tmp/long"; idxbad="$tmp/idxbad"; edges="$tmp/edges"
 
-echo "keel-lint · $(date '+%Y-%m-%d %H:%M') · 目录=$KEEL_DIR · 热区文档=$(hot_files | wc -l | tr -d '[:space:]')"
+HOTLIST="$tmp/hot.z"     # 热区清单（NUL 分隔，供 xargs 批量消费）
+ALLLIST="$tmp/all.z"     # 全量清单（含冷区，NUL 分隔）
+HOTLINES="$tmp/hot.ln"   # 热区清单（换行分隔，供 while read 消费）
+ALLLINES="$tmp/all.ln"   # 全量清单（换行分隔）
+# 两种视图各存一份的原因：xargs -0 读 NUL 清单（路径含空格安全），
+# 而后面 10 处 `while IFS= read -r f` 是按行读的——若让 hot_files 直接吐 NUL，
+# 那些循环会读到一个空行就 EOF，于是**所有后续检查静默跳过**（不报错、判死失效）。
+# 路径含空格在这份换行清单里也不安全，但 keel 约定文件名 kebab-case 不含空格
+# （§3.4，且 lint 第 4 项会判含空格的文件名），故按行读是安全的。
+hot_files() { cat "$HOTLINES"; }
+all_files() { cat "$ALLLINES"; }
+# 供 xargs 消费：-0 读 NUL 分隔。
+# **用法约定（踩过坑，务必照此写）**：清单路径必须走环境变量 XLIST，
+# 不能作为 xrun 的第一个位置参数——`xargs -0 CMD "$@"` 里 xargs 会把 "$@"
+# 里的每一项都当成"要追加到 CMD 后面的文件名"。于是 `xrun list awk 'prog'`
+# 会执行成 `awk list prog file1 file2…`：awk 把清单和脚本都当输入文件名，
+# 结果读不到任何文件、输出为空——**而且不报任何错**（实测踩过：
+# "xargs: hot.z: No such file or directory" 只在清单路径不完整时才现形）。
+# 正确形态：XLIST=清单; xrun awk 'prog'   （xrun 内部只做 xargs -0 CMD < "$XLIST"）
+XLIST=""
+xrun() { [ -s "$XLIST" ] || return 0; xargs -0 "$@" < "$XLIST"; return 0; }
+
+find "$KEEL_DIR" -name '*.md' -not -path '*/archive/*' -not -path '*/NOW-history/*' -print0 2>/dev/null | sort -z > "$HOTLIST"
+find "$KEEL_DIR" -name '*.md' -print0 2>/dev/null | sort -z > "$ALLLIST"
+tr '\0' '\n' < "$HOTLIST" > "$HOTLINES"
+tr '\0' '\n' < "$ALLLIST" > "$ALLLINES"
+HOTN=$(wc -l < "$HOTLINES" | tr -d '[:space:]')
+
+# ---------- frontmatter 一次提取，后续全部查表（v3.2 性能）----------
+# 原实现里 fm_val 每次调用 fork 4 次（awk + grep + sed + sed），而段 2/3/10
+# 对每个文件要调 5–6 次 → 单文件 20+ 次 fork，24 文件就是 500+ 次。
+# 这里改成：一个 awk 扫全部文件，把每个文件的 fm 字段一次算完落成查询表，
+# 之后 fmq 直接查表（零 fork）。行为等价，判据与报错文案不变。
+FMQ="$tmp/fmq"      # 查询表：<路径>\t<key>\t<value>
+FMHAS="$tmp/fmhas"  # 每个文件的 fm 原始行（供"字段是否存在"判断）
+if [ "$HOTN" -gt 0 ]; then
+  # 一次 awk 扫全部文件，把每个文件的 fm 字段算完落成查询表。
+  # 用 gawk/mawk 的 ENDFILE 在 POSIX awk 上不可用，故先试 ENDFILE 版本，
+  # 产物为空则回落到"逐文件一次 awk"（仍是 24 次而非 500 次 fork）。
+  : > "$FMQ"
+  XLIST="$HOTLIST"; xrun awk -v OFS='\t' '
+    function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
+    function yval(v) { if (v ~ /^#/) return ""; sub(/[[:space:]]+#.*$/, "", v); return trim(v) }
+    FNR==1 {
+      if (NR > 1) { for (kk in seen) print pf, kk, val[kk]; delete seen; delete val }
+      infm = ($0 == "---"); pf = FILENAME; next
+    }
+    infm && $0 == "---" { infm = 0; next }
+    infm {
+      ci = index($0, ":")
+      if (ci > 0) { k = substr($0, 1, ci - 1)
+        if (k ~ /^[A-Za-z0-9_-]+$/ && !(k in val)) { seen[k] = 1; val[k] = yval(trim(substr($0, ci + 1))) } }
+      next
+    }
+    ENDFILE { for (kk in seen) print pf, kk, val[kk]; delete seen; delete val }
+  ' > "$FMQ" 2>/dev/null
+  if [ ! -s "$FMQ" ]; then
+    : > "$FMQ"
+    while IFS= read -r f; do
+      awk -v OFS='\t' -v P="$f" '
+        function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
+        function yval(v) { if (v ~ /^#/) return ""; sub(/[[:space:]]+#.*$/, "", v); return trim(v) }
+        NR==1 { infm = ($0 == "---"); next }
+        infm && $0 == "---" { infm = 0; next }
+        infm { ci = index($0, ":"); if (ci > 0) { k = substr($0, 1, ci-1)
+                 if (k ~ /^[A-Za-z0-9_-]+$/ && !(k in val)) { val[k] = yval(trim(substr($0, ci+1))) } } }
+        END { for (kk in val) print P, kk, val[kk] }
+      ' "$f" >> "$FMQ" 2>/dev/null
+    done < "$HOTLINES"
+  fi
+fi
+# fmq <文件> <键> / fmhas <文件> <键>：查表取值 / 判断字段存在。
+# v3.2：原来每次调用 fork 一个 awk（段 2/3/10/11/12 合计 ~200 次）。
+# 现在把查询表整份读进一个 shell 变量，用 case 做行首匹配——**零 fork**。
+# 规模前提：查询表 = 文件数 × 字段数（keel-starter 实测 131 行），
+# 几百个文档也只到几千行，shell 变量完全装得下。
+# 换来的约束：值里不能有换行（frontmatter 是逐行键值对，天然满足）。
+# 查表用**纯 shell 循环**（没有 printf/grep/cut/head 任何子进程）。
+# 中间试过 `printf | grep | head | cut`，那仍是 4 次 fork／次调用，
+# 200 次调用反而比原来的 1 次 fork 更慢（实测 119s → 154s）——
+# 批量化不能只看"调用次数"，要看**每次调用内部有几个进程**。
+KEEL_NL='
+'
+FMQ_RAW=""
+if [ -s "$FMQ" ]; then FMQ_RAW=$(cat "$FMQ"); fi
+# fmq <文件> <键>：命中则打印值（首行），未命中返回空
+fmq() {
+  [ -n "$FMQ_RAW" ] || return 0
+  _want="$1	$2	"
+  _rest="$FMQ_RAW"
+  while [ -n "$_rest" ]; do
+    _line="${_rest%%$KEEL_NL*}"
+    if [ "$_line" = "$_rest" ]; then _rest=""; else _rest="${_rest#*$KEEL_NL}"; fi
+    case "$_line" in
+      "$_want"*) printf '%s' "${_line#"$_want"}"; return 0 ;;
+    esac
+  done
+  return 0
+}
+# fmhas <文件> <键>：字段是否存在（值可为空，故与 fmq 分开判断）
+fmhas() {
+  [ -n "$FMQ_RAW" ] || return 1
+  _want="$1	$2	"
+  _rest="$FMQ_RAW"
+  while [ -n "$_rest" ]; do
+    _line="${_rest%%$KEEL_NL*}"
+    if [ "$_line" = "$_rest" ]; then _rest=""; else _rest="${_rest#*$KEEL_NL}"; fi
+    case "$_line" in
+      "$_want"*) return 0 ;;
+    esac
+  done
+  return 1
+}
+
+# ---------- 链接一次提取，段 6/8/9 共用（v3.2 性能）----------
+# 段 6（引用环）、段 8（死链）、段 9（孤儿）原本各自对每个文件跑
+# `grep -oE + sed + tr`；段 9 还要为**每条链接** fork 2 次 cd + dirname/basename。
+# 实测：24 文件的段 9 单独跑要 49 秒（占整体 325 秒的大头）。
+# 这里改成一次 awk 抽出所有链接落表，三段各自消费——把 N×M 次进程降到 1 次。
+#
+# 关键写法说明：awk 的脚本用单引号包住，**不能**把文件清单直接接在脚本后面
+# （那是给 awk 当输入文件名，bash 会先执行它 —— 实测踩过，报了一屏
+# "scope:: command not found"）。正确做法是用 `xargs ... | awk` 或
+# `awk -f 脚本文件`，这里统一走 xargs 管道。
+LINKS="$tmp/links"
+if [ "$HOTN" -gt 0 ]; then
+  # 注意喂的是 $HOTLIST（NUL 分隔），不是 $HOTLINES —— xargs -0 只认 NUL。
+  # 喂错的话 xargs 会把整份换行清单当成**一个文件名**，awk 读不到文件、
+  # LINKS 变空，于是段 9 把所有文档误报成孤儿（实测踩过）。
+  XLIST="$HOTLIST"; xrun awk '
+    { line = $0
+      while (match(line, /\]\([^)]+\)/)) {
+        seg = substr(line, RSTART + 2, RLENGTH - 3)
+        p = seg; sub(/[ \t].*$/, "", p)
+        if (p != "") print FILENAME "\t" p
+        line = substr(line, RSTART + RLENGTH)
+      }
+      line = $0
+      while (match(line, /@[A-Za-z0-9_.\/-]+\.md/)) {
+        print FILENAME "\t" substr(line, RSTART + 1, RLENGTH - 1)
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' 2>/dev/null | sort -u > "$LINKS"
+fi
+
+
+_t0=$(date +%s 2>/dev/null || echo 0)
+echo "keel-lint · $(date '+%Y-%m-%d %H:%M') · 目录=$KEEL_DIR · 热区文档=$HOTN"
 echo "── 1. 预算：行数 / 字节 / 单行 / 目录文件数"
-while IFS= read -r f; do
-  rel=$(rel_of "$f")
-  case "$rel" in
-    */INDEX.md)          lim=$MAX_DOMAIN_INDEX; blim=$BYTES_DOMAIN_INDEX ;;
-    INDEX.md)            lim=$MAX_INDEX;        blim=$BYTES_INDEX ;;
-    NOW*.md|*/NOW*.md)   lim=$MAX_NOW;          blim=$BYTES_NOW ;;
-    pitfalls/*)          lim=$MAX_PIT;          blim=$BYTES_PIT ;;
-    *)                   lim=$MAX_DOC;          blim=$BYTES_DOC ;;
-  esac
-  n=$(wc -l < "$f" | tr -d '[:space:]')
-  b=$(wc -c < "$f" | tr -d '[:space:]')
-  [ "$n" -gt "$lim" ]  && fail_msg "超行数 ${n}>${lim}: $rel"
-  [ "$b" -gt "$blim" ] && fail_msg "超字节 ${b}>${blim}: $rel"
-done < <(hot_files)
+# 1a. 行数 + 字节：**一次 wc 扫全部文件**（原为每文件 2 次 wc + 2 次 tr = 4 次 fork）
+# 路径含空格安全：wc 由 xargs -0 喂 NUL 分隔清单，不经过 shell 分词。
+# 输出形如 "  42  1234 /path/to/file"，末列含空格时用 tab 切分前两列、其余归到末列。
+if [ "$HOTN" -gt 0 ]; then
+  XLIST="$HOTLIST"; xrun wc -lc > "$tmp/sizes" 2>/dev/null
+  # wc 多文件模式会追加一行 "total"，必须显式排除（实测踩过：
+  # 那行被当成文件名 total，报出 "超行数 793>160: total" 的假 fail）
+  while IFS=$' \t' read -r n b f; do
+    [ -n "${f:-}" ] || continue
+    [ "${f##*/}" = "total" ] && continue
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    rel=$(rel_of "$f")
+    case "$rel" in
+      */INDEX.md)          lim=$MAX_DOMAIN_INDEX; blim=$BYTES_DOMAIN_INDEX ;;
+      INDEX.md)            lim=$MAX_INDEX;        blim=$BYTES_INDEX ;;
+      NOW*.md|*/NOW*.md)   lim=$MAX_NOW;          blim=$BYTES_NOW ;;
+      pitfalls/*)          lim=$MAX_PIT;          blim=$BYTES_PIT ;;
+      *)                   lim=$MAX_DOC;          blim=$BYTES_DOC ;;
+    esac
+    [ "$n" -gt "$lim" ]  && fail_msg "超行数 ${n}>${lim}: $rel"
+    [ "$b" -gt "$blim" ] && fail_msg "超字节 ${b}>${blim}: $rel"
+  done < "$tmp/sizes"
+fi
 
 # 单行上限：LC_ALL=C 保证 awk 的 length() 按字节而非字符计
-while IFS= read -r f; do
-  LC_ALL=C awk -v R="$(rel_of "$f")" -v L="$MAX_LINE" \
-    'length($0) > L { printf "❌ 单行超限 %d>%d 字节: %s:%d\n", length($0), L, R, NR }' "$f"
-done < <(hot_files) > "$longf"
+# 批量版：一次 awk 扫全部文件（原来每文件 1 次 awk = 24 次 fork）
+if [ "$HOTN" -gt 0 ]; then
+  LC_ALL=C XLIST="$HOTLIST"; xrun awk -v L="$MAX_LINE" '
+    { if (length($0) > L) printf "❌ 单行超限 %d>%d 字节: %s:%d\n", length($0), L, FILENAME, FNR }
+  ' > "$longf" 2>/dev/null
+fi
 if [ -s "$longf" ]; then sed -n '1,10p' "$longf"; fail=1; fi
 
-while IFS= read -r d; do
+# 目录文件数：一次 find -printf 风格不可移植，改用 find 出行 + 一次 awk 聚合
+find "$KEEL_DIR" -type d 2>/dev/null | while IFS= read -r d; do
   case "$d" in */archive|*/archive/*|*/NOW-history|*/NOW-history/*) continue ;; esac
-  c=$(find "$d" -maxdepth 1 -type f | wc -l | tr -d '[:space:]')
-  [ "$c" -gt "$MAX_DIR_FILES" ] && fail_msg "目录文件超限 ${c}>${MAX_DIR_FILES}: $(rel_of "$d")/"
-done < <(find "$KEEL_DIR" -type d 2>/dev/null)
+  echo "$d"
+done > "$tmp/dirs" 2>/dev/null
+# 每个目录一次 ls 仍是 per-dir fork；这里用一次 find 输出全部条目后 awk 按目录聚合
+if [ -s "$tmp/dirs" ]; then
+  find "$KEEL_DIR" -type f 2>/dev/null | awk -v K="$KEEL_DIR" -v MAXD="$MAX_DIR_FILES" '
+    { p=$0; sub("/[^/]*$", "", p); if (p!=K) cnt[p]++ }
+    END { for (d in cnt) if (cnt[d] > MAXD) {
+             r=d; sub("^" K "/", "", r)
+             printf "❌ 目录文件超限 %d>%d: %s/\n", cnt[d], MAXD, r } }
+  ' > "$tmp/dirbig" 2>/dev/null
+  if [ -s "$tmp/dirbig" ]; then sort -u "$tmp/dirbig"; fail=1; fi
+fi
 
 echo "── 2. frontmatter：存在性 / 字段 / 行数 / 字节"
 while IFS= read -r f; do
   base=$(basename "$f")
   case "$base" in _template*) continue ;; esac
   rel=$(rel_of "$f")
-  if ! head -1 "$f" | grep -q '^---$'; then fail_msg "缺 frontmatter: $rel"; continue; fi
-  end=$(fm_end_line "$f")
+  # 存在性与闭合：仍需读首行与 fm 结束行，各 1 次 awk（可与字段查表合并，此处保持独立以免耦合）
+  if [ "$(head -1 "$f")" != "---" ]; then fail_msg "缺 frontmatter: $rel"; continue; fi
+  end=$(awk 'NR==1{next} /^---$/{print NR; exit}' "$f" 2>/dev/null)
   if [ -z "$end" ]; then fail_msg "frontmatter 未闭合: $rel"; continue; fi
   nl=$((end - 2))
   [ "$nl" -gt 10 ] && fail_msg "frontmatter 超行数 ${nl}>10: $rel"
   nb=$(sed -n "1,${end}p" "$f" | wc -c | tr -d '[:space:]')
   [ "$nb" -gt "$BYTES_FM" ] && fail_msg "frontmatter 超字节 ${nb}>${BYTES_FM}: $rel"
-  fm=$(fm_block "$f")
   for k in scope status last-verified keywords; do
-    printf '%s\n' "$fm" | grep -q "^$k:" || fail_msg "frontmatter 缺 $k: $rel"
+    fmhas "$f" "$k" || fail_msg "frontmatter 缺 $k: $rel"
   done
   case "$rel" in
     */INDEX.md) ;;   # 域索引只查基础字段
-    skills/*)   printf '%s\n' "$fm" | grep -q '^trigger:'  || fail_msg "skill 缺 trigger: $rel" ;;
-    pitfalls/*) printf '%s\n' "$fm" | grep -q '^severity:' || fail_msg "坑条目缺 severity: $rel"
-                printf '%s\n' "$fm" | grep -q '^triggers:' || fail_msg "坑条目缺 triggers: $rel" ;;
+    skills/*)   fmhas "$f" trigger  || fail_msg "skill 缺 trigger: $rel" ;;
+    pitfalls/*) fmhas "$f" severity || fail_msg "坑条目缺 severity: $rel"
+                fmhas "$f" triggers || fail_msg "坑条目缺 triggers: $rel" ;;
   esac
   case "$rel" in
-    INDEX.md)   printf '%s\n' "$fm" | grep -q '^keel-version:'  || fail_msg "根 INDEX 缺 keel-version: $rel"
-                printf '%s\n' "$fm" | grep -q '^project-state:' || fail_msg "根 INDEX 缺 project-state: $rel" ;;
+    INDEX.md)   fmhas "$f" keel-version  || fail_msg "根 INDEX 缺 keel-version: $rel"
+                fmhas "$f" project-state || fail_msg "根 INDEX 缺 project-state: $rel" ;;
   esac
-done < <(hot_files)
+done < "$HOTLINES"
 
 echo "── 3. 值域与格式（status / severity / keywords / last-verified / triggers）"
 while IFS= read -r f; do
   base=$(basename "$f")
   case "$base" in _template*) continue ;; esac
   rel=$(rel_of "$f")
-  fm=$(fm_block "$f"); [ -z "$fm" ] && continue
-  st=$(printf '%s\n' "$fm" | grep -m1 '^status:' | sed -E 's/^status:[[:space:]]*//' | yaml_val)
+  fmhas "$f" status || continue
+  st=$(fmq "$f" status)
   case "${st:-}" in
     active|distilled|archived|"") ;;
     *) fail_msg "status 值域非法（${st}）: $rel" ;;
   esac
-  lv=$(printf '%s\n' "$fm" | grep -m1 '^last-verified:' | sed -E 's/^last-verified:[[:space:]]*//' | yaml_val)
+  lv=$(fmq "$f" last-verified)
   if [ -n "${lv:-}" ]; then
     case "$lv" in
       [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
       *) fail_msg "last-verified 非 YYYY-MM-DD（${lv}）: $rel" ;;
     esac
   fi
-  kw=$(printf '%s\n' "$fm" | grep -m1 '^keywords:' | sed -E 's/^keywords:[[:space:]]*//' | yaml_val)
+  kw=$(fmq "$f" keywords)
   case "${kw:-}" in ""|"[]"|"[ ]") fail_msg "keywords 为空: $rel" ;; esac
   case "$rel" in
     pitfalls/*)
-      sv=$(printf '%s\n' "$fm" | grep -m1 '^severity:' | sed -E 's/^severity:[[:space:]]*//' | yaml_val)
+      sv=$(fmq "$f" severity)
       case "${sv:-}" in
         P0|P1|P2|P3|"") ;;
         *) fail_msg "severity 值域非法（${sv}）: $rel" ;;
       esac
-      tg=$(printf '%s\n' "$fm" | grep -m1 '^triggers:' | sed -E 's/^triggers:[[:space:]]*//' | yaml_val)
+      tg=$(fmq "$f" triggers)
       case "${tg:-}" in
         ''|*[!0-9]*) [ -n "${tg:-}" ] && fail_msg "triggers 非数字（${tg}）: $rel" ;;
       esac
@@ -187,24 +365,23 @@ else
 fi
 
 echo "── 6. 引用图环检测（md → md；§3.1 禁止循环引用，路由枢纽 INDEX.md 除外）"
-: > "$edges"
-while IFS= read -r f; do
-  from=$(basename "$f")
-  [ "$from" = "INDEX.md" ] && continue
-  {
-    grep -oE '\]\([^)]+\)' "$f" 2>/dev/null | sed -E 's/^\]\(([^) ]+).*/\1/'
-    grep -oE '@[A-Za-z0-9_./-]+\.md' "$f" 2>/dev/null | tr -d '@'
-  } | sort -u | while IFS= read -r link; do
-    case "$link" in http*|mailto:*|"") continue ;; esac
-    t="${link%%#*}"
-    case "$t" in *.md) ;; *) continue ;; esac
-    to=$(basename "$t")
-    # 索引是路由枢纽（人人都指向它、它也指向人人），把它当普通节点必然误报
-    [ "$to" = "INDEX.md" ] && continue
-    [ "$from" = "$to" ] && continue
-    printf '%s %s\n' "$from" "$to"
-  done
-done < <(hot_files) >> "$edges"
+# 边表由 LINKS 一次 awk 得出（v3.2：不再每文件跑 grep+sed+tr）
+if [ -s "$LINKS" ]; then
+  awk -F'\t' '
+    { f = $1; l = $2
+      if (l ~ /^https?:/ || l ~ /^mailto:/ || l == "") next
+      sub(/#.*$/, "", l)
+      if (l !~ /\.md$/) next
+      n = split(f, a, "/"); from = a[n]
+      if (from == "INDEX.md") next
+      m = split(l, b, "/"); to = b[m]
+      # 索引是路由枢纽（人人都指向它、它也指向人人），把它当普通节点必然误报
+      if (to == "INDEX.md") next
+      if (from == to) next
+      print from, to
+    }
+  ' "$LINKS" | sort -u > "$edges" 2>/dev/null
+fi
 sort -u "$edges" -o "$edges"
 if [ -s "$edges" ]; then
   if command -v tsort >/dev/null 2>&1; then
@@ -234,41 +411,84 @@ done
 [ "$anchor_ok" -eq 1 ] || fail_msg "点火锚点缺失或与 §4.1 原文不一致（查 CLAUDE.md / AGENTS.md / .cursorrules / .cursor/rules）"
 
 echo "── 8. 死链（@路径 与 markdown 链接，相对所在文件目录）"
-while IFS= read -r f; do
-  dir=$(dirname "$f")
-  {
-    grep -oE '\]\([^)]+\)' "$f" 2>/dev/null | sed -E 's/^\]\(([^) ]+).*/\1/'
-    grep -oE '@[A-Za-z0-9_./-]+\.md' "$f" 2>/dev/null | tr -d '@'
-  } | sort -u | while IFS= read -r link; do
+# 死链要查冷区（archive / NOW-history），所以按全量清单再抽一次链接。
+# 冷区文件极少（keel-starter 里 1 个），这次额外 awk 的成本可忽略。
+DEADL="$tmp/deadlinks"
+if [ -s "$ALLLINES" ]; then
+  xargs -0 awk '
+    { line = $0
+      while (match(line, /\]\([^)]+\)/)) {
+        seg = substr(line, RSTART + 2, RLENGTH - 3)
+        p = seg; sub(/[ \t].*$/, "", p)
+        if (p != "") print FILENAME "\t" p
+        line = substr(line, RSTART + RLENGTH)
+      }
+      line = $0
+      while (match(line, /@[A-Za-z0-9_.\/-]+\.md/)) {
+        print FILENAME "\t" substr(line, RSTART + 1, RLENGTH - 1)
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' < "$ALLLIST" 2>/dev/null | sort -u > "$DEADL"
+fi
+: > "$deadf"
+if [ -s "$DEADL" ]; then
+  while IFS=$'\t' read -r f link; do
+    [ -n "${link:-}" ] || continue
     case "$link" in http*|mailto:*|"") continue ;; esac
     t="${link%%#*}"; [ -z "$t" ] && continue
-    [ -e "$dir/$t" ] || echo "❌ 死链: $t  (见 $(rel_of "$f"))"
-  done
-done < <(all_files) > "$deadf"
+    case "$f" in
+      */*) dir=${f%/*} ;;
+      *)   dir="." ;;
+    esac
+    [ -e "$dir/$t" ] || echo "❌ 死链: $t  (见 ${f#"$KEEL_DIR"/})"
+  done < "$DEADL" >> "$deadf"
+fi
 if [ -s "$deadf" ]; then cat "$deadf"; fail=1; fi
 
 echo "── 9. 孤儿（热区文档未被任何热区文档以链接引用；INDEX/_template 豁免）"
 # v3.1 修正：孤儿判定改用"真实链接图"——把每条链接解析成目标文件的绝对路径再比对。
 # 旧实现是「grep 文件名」的近似：正文里偶然出现同名子串会漏报，文件改名会误报。
+# 被引用目标集合：把 LINKS 里每条链接按"相对所在文件目录"解析成规范化路径。
+# v3.2：原实现对**每条链接** fork 2 次 cd + 2 次 dirname/basename，
+# 24 文件 × 平均 8 条链接 ≈ 400 次进程，实测这一段单独就 49 秒。
+# 现在改成一次 awk 做纯字符串路径规范化（不依赖 cd —— cd 在 Windows 上
+# 还会把路径分隔符与预期搞乱），存在性判断留给后面一次批量 test。
+# 注意：LINKS 里的 $1 已经是 find 输出的路径（本身就含 $KEEL_DIR 前缀），
+# 所以这里只做"相对所在文件目录"的拼接，**不能再拼一次 K** ——
+# 拼两次会得到 keel/keel/xxx，于是每个文件都"未被引用"、全量误报孤儿（实测踩过）。
+awk -F'\t' '
+  function norm(p,   parts, np, i, out, seg) {
+    np = split(p, parts, "/"); out = ""
+    for (i = 1; i <= np; i++) {
+      seg = parts[i]
+      if (seg == "" || seg == ".") continue
+      if (seg == "..") { sub(/\/[^/]*$/, "", out); continue }
+      out = (out == "" ? seg : out "/" seg)
+    }
+    return out
+  }
+  { f = $1; l = $2
+    if (l ~ /^https?:/ || l ~ /^mailto:/ || l == "") next
+    sub(/#.*$/, "", l); if (l == "") next
+    n = split(f, a, "/"); fdir = ""
+    for (i = 1; i < n; i++) fdir = fdir a[i] "/"
+    tgt = norm(fdir l)
+    if (tgt != "") print tgt
+  }
+' "$LINKS" 2>/dev/null | sort -u > "$refd.raw" 2>/dev/null
+# 存在性过滤：awk 不知道文件系统状态，用一次 while + [ -e ] 判定（无 fork）
 : > "$refd"
-while IFS= read -r f; do
-  fdir=$(cd "$(dirname "$f")" && pwd)
-  {
-    grep -oE '\]\([^)]+\)' "$f" 2>/dev/null | sed -E 's/^\]\(([^) ]+).*/\1/'
-    grep -oE '@[A-Za-z0-9_./-]+\.md' "$f" 2>/dev/null | tr -d '@'
-  } | sort -u | while IFS= read -r link; do
-    case "$link" in http*|mailto:*|"") continue ;; esac
-    t="${link%%#*}"; [ -z "$t" ] && continue
-    tdir=$(cd "$fdir/$(dirname "$t")" 2>/dev/null && pwd) || continue
-    [ -e "$tdir/$(basename "$t")" ] && printf '%s\n' "$tdir/$(basename "$t")"
-  done
-done < <(hot_files) > "$refd"
+if [ -s "$refd.raw" ]; then
+  while IFS= read -r cand; do
+    [ -e "$cand" ] && printf '%s\n' "$cand" >> "$refd"
+  done < "$refd.raw"
+fi
 while IFS= read -r f; do
   base=$(basename "$f")
   case "$base" in INDEX.md|_template*) continue ;; esac
-  fabsp="$(cd "$(dirname "$f")" && pwd)/$base"
-  grep -qxF "$fabsp" "$refd" || fail_msg "孤儿（未被任何热区文档链接引用）: $(rel_of "$f")"
-done < <(hot_files)
+  grep -qxF "$f" "$refd" || fail_msg "孤儿（未被任何热区文档链接引用）: ${f#"$KEEL_DIR"/}"
+done < "$HOTLINES"
 
 echo "── 10. 陈旧（last-verified / NOW updated；豁免类目见 §9.4）"
 today=$(date +%s)
@@ -276,8 +496,8 @@ while IFS= read -r f; do
   rel=$(rel_of "$f")
   case "$(basename "$f")" in _template*) continue ;; esac
   case "$rel" in decisions/*) continue ;; esac            # ADR 定稿即不可变，见 §9.4
-  [ "$(fm_val "$f" stale-check)" = "off" ] && continue     # 逃生口，需在 decisions/ 留理由
-  d=$(fm_val "$f" last-verified)
+  [ "$(fmq "$f" stale-check)" = "off" ] && continue     # 逃生口，需在 decisions/ 留理由
+  d=$(fmq "$f" last-verified)
   if [ -n "$d" ]; then
     e=$(to_epoch "$d")
     if [ -n "$e" ]; then
@@ -288,7 +508,7 @@ while IFS= read -r f; do
     fi
   fi
   case "$rel" in NOW*.md|*/NOW*.md)
-    u=$(fm_val "$f" updated)
+    u=$(fmq "$f" updated)
     if [ -z "$u" ]; then fail_msg "NOW 缺 updated: $rel"
     else
       e=$(to_epoch "$u")
@@ -305,7 +525,7 @@ while IFS= read -r f; do
   for h in "## 症状" "## 根因" "## 正解"; do
     grep -qF -- "$h" "$f" || fail_msg "坑条目缺失【${h}】: $rel"
   done
-  t=$(fm_val "$f" triggers)
+  t=$(fmq "$f" triggers)
   case "${t:-0}" in
     ''|*[!0-9]*) [ -n "${t:-}" ] && warn_msg "triggers 非数字: $rel" ;;
     *) [ "${t:-0}" -ge "$DISTILL_AT" ] && warn_msg "待蒸馏（triggers=${t} ≥ ${DISTILL_AT}）: $rel" ;;
@@ -315,7 +535,7 @@ done < <(hot_files)
 echo "── 12. 状态机（frozen 契约冻结 / 例外计数）"
 IDX="$KEEL_DIR/INDEX.md"
 if [ -f "$IDX" ]; then
-  ps=$(fm_val "$IDX" project-state)
+  ps=$(fmq "$IDX" project-state)
   case "${ps:-}" in
     frozen)
       if command -v git >/dev/null 2>&1 && git -C "$KEEL_DIR" rev-parse --git-dir >/dev/null 2>&1; then
@@ -327,24 +547,28 @@ if [ -f "$IDX" ]; then
     *)  fail_msg "project-state 值域非法（${ps}）: INDEX.md" ;;
   esac
 fi
-if [ -d "$KEEL_DIR/decisions" ]; then
+# decisions 清单一次生成，两个子检查共用（v3.2：原来两个独立的 find）
+DECL="$tmp/decl"
+find "$KEEL_DIR/decisions" -name '*.md' 2>/dev/null | sort > "$DECL"
+if [ -s "$DECL" ]; then
   mon=$(date '+%Y-%m'); exc=0
   while IFS= read -r d; do
-    case "$(basename "$d")" in _template*) continue ;; esac   # 模板不是真实记录（§3.4 豁免）
-    [ "$(fm_val "$d" type)" = "exception" ] || continue
-    made=$(fm_val "$d" created)
-    if [ -z "${made:-}" ]; then fail_msg "例外决策缺 created 字段: $(rel_of "$d")"; continue; fi
+    case "${d##*/}" in _template*) continue ;; esac   # 模板不是真实记录（§3.4 豁免）
+    [ "$(fmq "$d" type)" = "exception" ] || continue
+    made=$(fmq "$d" created)
+    if [ -z "${made:-}" ]; then fail_msg "例外决策缺 created 字段: ${d#"$KEEL_DIR"/}"; continue; fi
     case "$made" in "$mon"*) exc=$((exc + 1)) ;; esac
-  done < <(find "$KEEL_DIR/decisions" -name '*.md' 2>/dev/null)
+  done < "$DECL"
   [ "$exc" -gt 2 ] && fail_msg "本月例外决策 ${exc}>2，强制退回 building（§5.2）"
+  # 取代关系：superseded-by 必须指向存在的文件（ADR 靠"被谁取代"表达时效，而非 last-verified）
+  while IFS= read -r d; do
+    case "${d##*/}" in _template*) continue ;; esac     # 模板里的占位值不算数
+    sb=$(fmq "$d" superseded-by)
+    [ -n "${sb:-}" ] || continue
+    case "$d" in */*) sbdir=${d%/*} ;; *) sbdir="." ;; esac
+    [ -e "$sbdir/$sb" ] || fail_msg "superseded-by 指向不存在的文件（${sb}）: ${d#"$KEEL_DIR"/}"
+  done < "$DECL"
 fi
-# 取代关系：superseded-by 必须指向存在的文件（ADR 靠"被谁取代"表达时效，而非 last-verified）
-while IFS= read -r d; do
-  case "$(basename "$d")" in _template*) continue ;; esac     # 模板里的占位值不算数
-  sb=$(fm_val "$d" superseded-by)
-  [ -n "${sb:-}" ] || continue
-  [ -e "$(dirname "$d")/$sb" ] || fail_msg "superseded-by 指向不存在的文件（${sb}）: $(rel_of "$d")"
-done < <(find "$KEEL_DIR/decisions" -name '*.md' 2>/dev/null)
 
 echo "── 13. 闭环钩子（本体存在且可执行；§10.4 铁律：缺一，闭环不成立）"
 for h in pre-commit commit-msg; do
@@ -353,6 +577,17 @@ for h in pre-commit commit-msg; do
   elif [ ! -x "$hf" ]; then fail_msg "闭环钩子不可执行（需 chmod +x）: checks/hooks/$h"; fi
 done
 
+# 自报耗时并对照 LINT_SECONDS（ADR 0008）：
+# **只告警不 fail**——机器慢不等于文件错。把性能当 fail 会让人在慢机器上
+# 开始绕过 lint，那是比慢更坏的结果（§9.4 同类教训：制造大规模假告警）。
+_el=$(date +%s 2>/dev/null || echo 0)
+if [ "$_t0" -gt 0 ] && [ "$_el" -ge "$_t0" ]; then
+  _spent=$((_el - _t0))
+  if [ "$_spent" -gt "${LINT_SECONDS:-300}" ]; then
+    warn_msg "lint 耗时 ${_spent}s 超过预算 ${LINT_SECONDS}s —— 文件数变多或存在 per-file fork；改预算只改 checks/budget.env"
+  fi
+  echo "   耗时 ${_spent}s（预算 ${LINT_SECONDS:-300}s）"
+fi
 echo "──"
 if [ "$fail" -eq 0 ]; then echo "✅ keel-lint 通过"; else echo "❌ keel-lint 失败（见上方 ❌ 项）"; fi
 exit "$fail"
