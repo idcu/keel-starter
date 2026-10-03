@@ -92,11 +92,36 @@ echo "── 4. 装钩子（core.hooksPath）"
 bash "$TARGET/keel/checks/install-hooks.sh" "$TARGET" 2>&1 | sed 's/^/   /'
 
 echo "── 5. 内核校验：必须 0 fail"
-if bash "$TARGET/keel/checks/keel-lint.sh" keel >/dev/null 2>&1; then
+# 不把输出丢进 /dev/null：**新装的项目必然报"点火锚点缺失"**（这是设计意图，
+# 不是故障）。若只说"lint 未通过"而不说判了什么，新用户会以为装坏了。
+# **必须 cd 到目标目录再跑 lint**：install.sh 通常从别处调用（下载到 /tmp 再执行），
+# 而 keel-lint.sh 的入参 `keel` 是**相对当前目录**解析的。
+# 实测踩过：不 cd 时，cwd 在发布仓 → lint 校验的是发布仓自己（绿），
+# 于是"装到新项目"这一步的验证全是假的——比不验证更坏。
+lintout=$(cd "$TARGET" && bash keel/checks/keel-lint.sh keel 2>&1)
+lint_rc=$?
+if [ "$lint_rc" -eq 0 ]; then
   echo "   ✅ lint 通过"
 else
-  echo "   ❌ lint 未通过，逐条跑一次看原因："
-  echo "      bash keel/checks/keel-lint.sh keel"
+  echo "   ❌ lint 未通过。以下是它判死的原因："
+  printf '%s\n' "$lintout" | grep -E '^❌' | head -10 | sed 's/^/      /'
+  # 注意：必须匹配 **lint 自己的报错文案**，不能匹配本脚本后面打印的提示语——
+  # 否则会出现"提示说缺锚点、实际缺的是别的"这种自证陷阱（实测踩过：
+  # 实际判死是「坑条目未登记」+「孤儿」，提示却说缺锚点）。
+  # 判据：lint 报锚点缺失时原文含「锚点缺失或与 §4.1 原文不一致」。
+  if printf '%s\n' "$lintout" | grep -q '锚点缺失或与'; then
+    echo
+    echo "   👉 缺的是**点火锚点**——那是第 1 步"贴锚点"还没做。"
+    echo "      Keel 的检索协议写在 INDEX.md 里，但 AI 不会凭空去读它："
+    echo "      协议在门内，钥匙必须在门外。这一句必须放进你的工具规则："
+    echo
+    echo "        任何任务开始前，先读 keel/INDEX.md 与其中指向的 NOW.md，并遵守 INDEX.md 里的检索协议。"
+    echo
+    echo "      放进 AGENTS.md / CLAUDE.md / .cursor/rules/keel.mdc 任一处即可。"
+  else
+    echo
+    echo "   逐条跑一次看完整原因：bash keel/checks/keel-lint.sh keel"
+  fi
   exit 1
 fi
 

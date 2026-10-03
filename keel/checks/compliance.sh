@@ -80,12 +80,25 @@ report() {
   local as_json=0
   for a in "$@"; do [ "$a" = "--json" ] && as_json=1; done
 
+  # ── 放行后被回滚的提交（v3.3.1 起纳入分子）──────────────────
+  # 为什么必须算：lint 说"通过"、提交成功，但后来被 revert 了——
+  # **那才是真正的"不遵守"**，而且是 lint 自己看不见的那一类。
+  # 只看 lint 命中会把"事后被推翻的提交"算成遵守，虚高。
+  #
+  # 匹配 `^Revert "` 是精确的 git 自动生成格式；**不用 `-i --grep=revert`**——
+  # 实测后者会把"实现 revert 按钮的功能"这类普通提交误计进去。
+  local reverts=0
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    reverts=$(git log --oneline --grep='^Revert "' 2>/dev/null | wc -l | tr -d '[:space:]')
+  fi
+
   if [ ! -s "$VIO" ]; then
     if [ "$as_json" -eq 1 ]; then
-      printf '{"rounds":0,"violating":0,"rate":null,"note":"no data"}\n'
+      printf '{"rounds":0,"violating":0,"reverted":%s,"rate":null,"note":"no data"}\n' "$reverts"
     else
       echo "compliance · 还没有任何记录"
       echo "   记录由 pre-commit 自动写入；先提交一次（哪怕 --no-verify 也会记）再来看。"
+      [ "$reverts" -gt 0 ] && echo "   （已发现 $reverts 笔 revert 提交——它们会计入分子）"
     fi
     return 0
   fi
@@ -105,36 +118,61 @@ report() {
   set -- $agg
   local rounds="$1" violating="$2" tfails="$3" twarns="$4" tfiles="$5"
 
-  # 遵守率 = 1 − 命中轮次/总轮次，保留一位小数
+  # 遵守率 = 1 − (被拦截的轮次 + 事后被回滚的提交) / 总轮次
+  #
+  # 分子为什么是"命中轮次 + 回滚数"而不是"命中条数"：
+  #   一次提交踩 3 条和踩 1 条，对"这轮守没守规矩"是同一件事；
+  #   而"lint 放行、事后被 revert"与"lint 拦截"在**守没守规矩**这件事上也是同一件——
+  #   都是这一轮没有产出可接受的结果。放行后回滚甚至更严重：
+  #   它先是骗过了门禁，之后才被推翻。
+  local viol_total=$((violating + reverts))
   local rate="n/a"
   if [ "$rounds" -gt 0 ]; then
-    rate=$(awk -v v="$violating" -v r="$rounds" 'BEGIN { printf "%.1f", (1 - v/r) * 100 }')
+    rate=$(awk -v v="$viol_total" -v r="$rounds" 'BEGIN { printf "%.1f", (1 - v/r) * 100 }')
+  fi
+
+  # 预算超限率（调研报告 §5.2）：测的是"上下文基座够不够用"，与遵守率正相关
+  local over_n=0 over_r=0
+  if [ -s "$LOAD" ]; then
+    set -- $(awk -F'\t' '
+      { n++
+        if (match($0, /bytes=[0-9]+/)) { v = substr($0, RSTART+6, RLENGTH-6); s += v; if (v > max) max = v }
+        if (match($0, /over=[01]/)) { if (substr($0, RSTART+5, 1) == "1") o++ }
+      }
+      END { printf "%d %d %d", n+0, o+0, (n>0 ? s/n : 0) }' "$LOAD")
+    over_n="$1"; over_r="$2"
   fi
 
   if [ "$as_json" -eq 1 ]; then
-    # 字段名说清是累计还是均值——之前叫 filesPerRound 却给累计值，读的人会误判
-    printf '{"rounds":%s,"violating":%s,"rate":%s,"totalFails":%s,"totalWarns":%s,"filesTotal":%s,"filesAvg":%s}\n' \
-      "$rounds" "$violating" "$rate" "$tfails" "$twarns" "$tfiles" \
-      "$( [ "$rounds" -gt 0 ] && awk -v f="$tfiles" -v r="$rounds" 'BEGIN{printf "%.1f", f/r}' || echo 0 )"
+    printf '{"rounds":%s,"violating":%s,"reverted":%s,"violationsTotal":%s,"rate":%s,"totalFails":%s,"totalWarns":%s,"filesTotal":%s,"filesAvg":%s,"loadOverRate":%s}\n' \
+      "$rounds" "$violating" "$reverts" "$viol_total" "$rate" "$tfails" "$twarns" "$tfiles" \
+      "$( [ "$rounds" -gt 0 ] && awk -v f="$tfiles" -v r="$rounds" 'BEGIN{printf "%.1f", f/r}' || echo 0 )" \
+      "$( [ "$over_n" -gt 0 ] && awk -v o="$over_r" -v n="$over_n" 'BEGIN{printf "%.1f", o/n*100}' || echo "null" )"
     return 0
   fi
 
   echo "compliance · 遵守率（ADR 0009 · 口径见设计稿 §11.2）"
-  echo "  记录轮次        : $rounds"
-  echo "  其中有命中的轮次 : $violating"
-  echo "  遵守率          : ${rate}%"
-  echo "  累计 ❌ / ⚠️    : $tfails / $twarns"
-  echo "  平均每轮改动文件 : $( [ "$rounds" -gt 0 ] && awk -v f="$tfiles" -v r="$rounds" 'BEGIN{printf "%.1f", f/r}' || echo 0 ) 个"
+  echo "  检查轮次（分母）   : $rounds"
+  echo "  ├ lint 命中被拦    : $violating"
+  echo "  └ 放行后被回滚     : $reverts   ← lint 看不见的那一类"
+  echo "  违反合计（分子）   : $viol_total"
+  echo "  遵守率             : ${rate}%"
+  echo "  累计 ❌ / ⚠️       : $tfails / $twarns"
+  echo "  平均每轮改动文件    : $( [ "$rounds" -gt 0 ] && awk -v f="$tfiles" -v r="$rounds" 'BEGIN{printf "%.1f", f/r}' || echo 0 ) 个"
   if [ -s "$LOAD" ]; then
-    echo "  ── 单轮加载量（load-estimate.sh 口径）"
+    echo "  ── 单轮加载量（load-estimate.sh 口径 · 预算 ${BYTES_SESSION:-15000}）"
     awk -F'\t' '{ if (match($0, /bytes=[0-9]+/)) { v=substr($0,RSTART+6,RLENGTH-6); s+=v; n++; if (v>max) max=v } }
-         END { if (n>0) printf "    已记录 %d 轮 · 平均 %d 字节 · 峰值 %d 字节（预算 %s）\n", n, s/n, max, "'"${BYTES_SESSION:-15000}"'" }' "$LOAD"
+         END { if (n>0) printf "    已记录 %d 轮 · 平均 %d 字节 · 峰值 %d 字节\n", n, s/n, max }' "$LOAD"
+    if [ "$over_n" -gt 0 ]; then
+      echo "    超限率 $over_r/$over_n 轮 = $(awk -v o="$over_r" -v n="$over_n" 'BEGIN{printf "%.1f", o/n*100}')%"
+    fi
   fi
   echo
-  echo "  ⚠️ 读数字之前先读这三条："
+  echo "  ⚠️ 读数字之前先读这四条："
   echo "     1. 遵守率低**先查规则是否可遵守**（§2 原则 4），不是先怪 AI"
   echo "     2. 它只量「提交时的合规」，没提交的工作不计入"
-  echo "     3. 没有基线就没有意义——第一次的数字别当成绩"
+  echo "     3. 回滚数高 → 多半是**门禁放行了不该放的东西**（不是 AI 不听话）"
+  echo "     4. 没有基线就没有意义——第一次的数字别当成绩"
 }
 
 # ── reset：清空 ─────────────────────────────────────────────────

@@ -95,6 +95,21 @@ echo "  按需命中（$listed 个文件）: $ondemand"
 echo "  ─────────────────────────────"
 printf '  本轮合计                : %s 字节  ≈ %s token（按 3 字节/token，§7.1）\n' "$total" "$((total / 3))"
 
+# 记一轮加载量到 load.jsonl，给遵守率报告算「超限率」（ADR 0009 / §11.2）。
+# 超限率测的是"上下文基座够不够用"——它是**基座健康度**，与遵守率正相关但不是一回事：
+#   遵守率低 → AI 不守规矩；超限率高 → 基座装不下该装的东西，该拆/提/沉了。
+# **超限时也必须记**（over=1）——超限那一轮恰恰最需要被看见。
+if [ "${KEEL_NO_METRICS:-0}" != "1" ]; then
+  mdir="$KEEL/checks/.metrics"
+  if mkdir -p "$mdir" 2>/dev/null; then
+    over=0
+    [ "$total" -gt "$BYTES_SESSION" ] && over=1
+    printf '%s\tbytes=%s\ttoken=%s\tover=%s\tkws=%s\n' \
+      "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$total" "$((total / 3))" "$over" "$*" \
+      >> "$mdir/load.jsonl" 2>/dev/null || true
+  fi
+fi
+
 if [ "$total" -gt "$BYTES_SESSION" ]; then
   echo "❌ 超预算 ${total}>${BYTES_SESSION}：先收窄关键词，不要顺手全读（§7.3 拆 / 提 / 沉）"
   exit 1

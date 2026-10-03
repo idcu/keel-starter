@@ -28,6 +28,57 @@ jobs:
       - name: 检索增强接入位（未声明即正常，恒 exit 0）
         run: bash keel/checks/check-mcp-config.sh
 
+      # ── 分发入口冒烟（v3.3.1 新增）────────────────────────────────
+      # 为什么必须测：install.sh 是用户接触 Keel 的**第一条命令**，
+      # 而前面那些步骤全是在 starter 仓内自检——**装到别的项目里能不能用，
+      # 它们一句都没验**。这里用一个临时空项目做端到端：装 → 补锚点 → lint 绿。
+      #
+      # 用 sed 把 REPO 指向本仓，避免 CI 里依赖 Gitee 可达性（也更快的反馈）。
+      # 验的是**结构**（脚本能跑通、钩子装上、锚点缺失能判死、补上后转绿），
+      # 不是"从远端拉取"那一步（那依赖网络，交给 release.sh 与真实用户）。
+      - name: install.sh 端到端冒烟（空项目 → 装 → 补锚点 → lint 绿）
+        run: |
+          set -euo pipefail
+          T=$(mktemp -d)
+          sed "s|^REPO=.*|REPO=\"$PWD\"|" install.sh > "$T/install.sh"
+          chmod +x "$T/install.sh"
+          git init -q "$T/proj"
+          # 装（预期以"锚点缺失"的非零退出——那是设计意图：没点火就不算装好）
+          if bash "$T/install.sh" "$T/proj" >"$T/log" 2>&1; then
+            echo "❌ 装完居然是 exit 0：未验证锚点缺失会被判死？"
+            cat "$T/log"; exit 1
+          fi
+          # 匹配 lint 自己的报错原文，不匹配 install.sh 打印的提示语
+          # （否则会出现"提示说 X、实际是 Y"的自证陷阱）
+          grep -q "❌" "$T/log" || { echo "❌ 安装失败但没有任何 ❌ 判死项，install.sh 吞掉了原因"; cat "$T/log"; exit 1; }
+          echo "--- 安装输出（预期含锚点提示）---"; tail -14 "$T/log"
+          # 钩子装上了吗
+          test -f "$T/proj/keel/checks/hooks/pre-commit" || { echo "❌ 钩子本体缺失"; exit 1; }
+          test -x "$T/proj/keel/checks/hooks/pre-commit" || { echo "❌ 钩子不可执行（100755 丢了？）"; exit 1; }
+          # 补锚点后应转绿
+          cat > "$T/proj/AGENTS.md" <<'EOF'
+          # test
+          任何任务开始前，先读 keel/INDEX.md 与其中指向的 NOW.md，并遵守 INDEX.md 里的检索协议。
+          EOF
+          (cd "$T/proj" && bash keel/checks/keel-lint.sh keel >"$T/lint" 2>&1) \
+            || { echo "❌ 补锚点后 lint 仍不通过"; tail -20 "$T/lint"; exit 1; }
+          echo "✅ install.sh 端到端通过（安装 → 钩子 100755 → 锚点判死 → 补上转绿）"
+
+      - name: 遵守率脚本自检（口径 / JSON / 边界）
+        run: |
+          set -euo pipefail
+          bash keel/checks/compliance.sh report            # 空数据：应提示无记录且不报错
+          bash keel/checks/compliance.sh record --fails 2 --warns 0 --files 1
+          bash keel/checks/compliance.sh record --fails 0 --warns 0 --files 2
+          # 有回滚时违反数应为 1+1=2 → 1 - 2/2 = 0%
+          git -c user.email=ci@ci -c user.name=ci commit -q --allow-empty -m 'Revert "ci 冒烟用"'
+          out=$(bash keel/checks/compliance.sh report --json)
+          echo "$out"
+          echo "$out" | grep -q '"reverted":1' || { echo "❌ 回滚数未计入"; exit 1; }
+          echo "$out" | grep -q '"rate":0.0'   || { echo "❌ 遵守率算错（预期 0.0）"; exit 1; }
+          echo "✅ 遵守率口径正确（lint 命中 + 回滚 计入分子）"
+          bash keel/checks/compliance.sh reset
+
       # 项目自定的扩展检查（keel/checks/rules.md 里声明的命令）
       # - name: 扩展检查
       #   run: npm run check:contracts
