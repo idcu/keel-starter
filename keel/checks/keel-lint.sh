@@ -99,7 +99,7 @@ base_set() { BASE="${1##*/}"; }
 
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 # 用临时文件收集结果：兼容 bash 3.2（case 不能直接出现在 $() 内），也避开管道子 shell 吞掉 fail 计数
-deadf="$tmp/dead"; refd="$tmp/refd"; longf="$tmp/long"; idxbad="$tmp/idxbad"; edges="$tmp/edges"
+deadf="$tmp/dead"; refd="$tmp/refd"; longf="$tmp/long"; idxbad="$tmp/idxbad"; edges="$tmp/edges"; pitmiss="$tmp/pitmiss"; pitmisslist="$tmp/pitmisslist"
 
 HOTLIST="$tmp/hot.z"     # 热区清单（NUL 分隔，供 xargs 批量消费）
 ALLLIST="$tmp/all.z"     # 全量清单（含冷区，NUL 分隔）
@@ -572,23 +572,45 @@ while IFS= read -r f; do
 done < <(hot_files)
 
 echo "── 11. 坑条目（三段式 + 蒸馏阈值）"
-# 刻意保持逐文件 3 次 grep：曾试过批量化（一次 awk + ENDFILE），
-# 但 ENDFILE 规则在"跳过"的文件上同样触发，**过滤与 ENDFILE 不可靠地共存**——
-# 实测把 12 条真坑全部漏判、反而报出 39 个非坑文件。
-# 收益只有 3×坑数×fork（12 坑 ≈ 3.6s），不值得为它引入误判风险（ADR 0013 原则：语义优先）。
+# 三段式批量化（v3.4.1）：原为每条坑 3 次 grep（12 坑 = 36 次 fork，~3.6s）。
+# **过滤与判断必须分开**：上一版把过滤写进 awk 的 `FNR==1` + `ENDFILE`，
+# 而 `ENDFILE` **不受 skip 状态约束** → 12 条真坑全漏判、39 个非坑文件误报
+# （坑：awk-enfile-ignores-skip-state）。
+# 现在：① 过滤在 shell 侧（纯 `case`，零 fork）落成清单；② 一次 awk 扫清单里的全部文件。
+# ② 用 `FNR==1` 切文件 + `END` 收尾——**POSIX awk 即可**，不依赖 gawk 的 ENDFILE。
+: > "$pitmiss"
+: > "$pitmisslist"
 while IFS= read -r f; do
   rel_set "$f"; rel=$REL
   case "$rel" in pitfalls/*) ;; *) continue ;; esac
   base_set "$f"; case "$BASE" in INDEX.md|_template*) continue ;; esac
-  for h in "## 症状" "## 根因" "## 正解"; do
-    grep -qF -- "$h" "$f" || fail_msg "坑条目缺失【${h}】: $rel"
-  done
+  printf '%s\n' "$f" >> "$pitmisslist"
+done < <(hot_files)
+if [ -s "$pitmisslist" ]; then
+  tr '\n' '\0' < "$pitmisslist" | xargs -0 awk '
+    function rel(p) { sub(/^.*\/keel\//, "keel/", p); return p }
+    function report(  i) {
+      for (i = 1; i <= 3; i++) if (!seen[i]) printf "❌ 坑条目缺失【%s】: %s\n", h[i], r
+    }
+    BEGIN { h[1]="## 症状"; h[2]="## 根因"; h[3]="## 正解" }
+    FNR == 1 { if (NR > 1) report(); r = rel(FILENAME); seen[1]=seen[2]=seen[3]=0 }
+    { for (i = 1; i <= 3; i++) if (index($0, h[i]) > 0) seen[i] = 1 }
+    END { if (NR > 0) report() }
+  ' 2>/dev/null | sort -u > "$pitmiss"
+  if [ -s "$pitmiss" ]; then sed -n '1,10p' "$pitmiss"; fail=1; fi
+fi
+
+while IFS= read -r f; do
+  rel_set "$f"; rel=$REL
+  case "$rel" in pitfalls/*) ;; *) continue ;; esac
+  base_set "$f"; case "$BASE" in INDEX.md|_template*) continue ;; esac
   fmq_set "$f" triggers; t=$REPLY
   case "${t:-0}" in
     ''|*[!0-9]*) [ -n "${t:-}" ] && warn_msg "triggers 非数字: $rel" ;;
     *) [ "${t:-0}" -ge "$DISTILL_AT" ] && warn_msg "待蒸馏（triggers=${t} ≥ ${DISTILL_AT}）: $rel" ;;
   esac
 done < <(hot_files)
+
 
 echo "── 12. 状态机（frozen 契约冻结 / 例外计数）"
 IDX="$KEEL_DIR/INDEX.md"
