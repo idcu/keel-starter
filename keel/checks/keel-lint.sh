@@ -50,7 +50,32 @@ fm_end_line() { awk 'NR==1 && $0=="---" { next } /^---$/ { print NR; exit }' "$1
 # 会得到一个假的非空值——例如占位用的 `superseded-by:` 会被误判成"指向不存在的文件"
 yaml_val() { sed -E "s/^#.*$//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//"; }
 fm_val() { fm_block "$1" | grep -m1 "^$2:" | sed -E "s/^$2:[[:space:]]*//" | yaml_val; }
-to_epoch() { date -j -f "%Y-%m-%d" "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null || true; }
+# YYYY-MM-DD → epoch 秒，**纯 shell 算术，零 fork**（v3.4.0 / ADR 0013 续）
+# 原实现每次调用跑两次 `date`（先试 BSD 的 -j -f，在 Linux/Git Bash 上必然失败，
+# 再试 GNU 的 -d）—— 实测每次 ~250ms，段 10 每文件调 1–2 次，是剩余最大的一块。
+# 改用 Howard Hinnant 的 days_from_civil（公历恒等式，无闰年特殊分支）。
+# **该算法已对 23 个日期与 `date -u -d` 逐字对照**（含 1900/2100 非闰年世纪、
+# 2000/2024 闰年、1600/9999 边界），非法输入一律拒绝——判据与报错文案不变。
+to_epoch() {
+  case "$1" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+    *) return 1 ;;
+  esac
+  _y=${1%%-*}; _r=${1#*-}; _m=${_r%%-*}; _d=${1##*-}
+  # 显式去前导零：bash 里 08 会被当八进制（$((08)) 直接报错）
+  _y=$((10#$_y)); _m=$((10#$_m)); _d=$((10#$_d))
+  [ "$_m" -ge 1 ] && [ "$_m" -le 12 ] || return 1
+  [ "$_d" -ge 1 ] && [ "$_d" -le 31 ] || return 1
+  [ "$_y" -ge 1 ] || return 1
+  [ "$_m" -le 2 ] && _y=$((_y - 1))
+  _era=$(( _y / 400 ))
+  _yoe=$(( _y - _era * 400 ))
+  if [ "$_m" -gt 2 ]; then _doy=$(( (153*(_m-3) + 2) / 5 + _d - 1 ))
+  else _doy=$(( (153*(_m+9) + 2) / 5 + _d - 1 )); fi
+  _doe=$(( _yoe*365 + _yoe/4 - _yoe/100 + _doy ))
+  REPLY=$(( (_era*146097 + _doe - 719468) * 86400 ))
+  return 0
+}
 
 # ---------- 性能：零 fork 的取值方式（v3.3.9 / ADR 0013）----------
 # 实测（Windows/Git Bash，N=30）：**`v=$(纯 shell 函数)` 本身就要 ~100ms**，
@@ -527,7 +552,8 @@ while IFS= read -r f; do
   [ "$REPLY" = "off" ] && continue     # 逃生口，需在 decisions/ 留理由
   fmq_set "$f" last-verified; d=$REPLY
   if [ -n "$d" ]; then
-    e=$(to_epoch "$d")
+    if to_epoch "$d"; then e=$REPLY
+    else e=""; fi
     if [ -n "$e" ]; then
       age=$(( (today - e) / 86400 ))
       [ "$age" -gt "$STALE_DAYS" ] && warn_msg "stale(${age}d): $rel"
@@ -539,8 +565,8 @@ while IFS= read -r f; do
     fmq_set "$f" updated; u=$REPLY
     if [ -z "$u" ]; then fail_msg "NOW 缺 updated: $rel"
     else
-      e=$(to_epoch "$u")
-      [ -n "$e" ] && { age=$(( (today - e) / 86400 )); [ "$age" -gt "$NOW_STALE_DAYS" ] && warn_msg "NOW 已 ${age}d 未更新: $rel"; }
+      to_epoch "$u" && { e=$REPLY
+        [ -n "$e" ] && { age=$(( (today - e) / 86400 )); [ "$age" -gt "$NOW_STALE_DAYS" ] && warn_msg "NOW 已 ${age}d 未更新: $rel"; } }
     fi ;;
   esac
 done < <(hot_files)

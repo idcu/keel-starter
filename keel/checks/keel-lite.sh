@@ -39,6 +39,21 @@ EOF
 )
 
 echo "keel-lite · 目录=$KEEL · 模式=$([ "$APPLY" -eq 1 ] && echo '应用（会删文件）' || echo 'dry-run（只打印）')"
+
+# ---------- 顺序很要紧：先算好新 INDEX，再删目录 ----------
+# 实测踩过（v3.4.0 修）：先删目录再剥路由行，会出现两个问题——
+#   ① 剥离用的特征表里有 `](decisions/INDEX.md)` 等，删完后 grep 仍能匹配（那是文本），
+#      但 dry-run 与 --apply 的"剥离行数"会对不上（实测 dry-run 说 6 行、apply 说"无需剥离"），
+#      因为 apply 跑的是同一份已被上一步改过的文件；
+#   ② 更严重：INDEX 自己也是"必读文件"，它一旦不再链接 CONSTITUTION / NOW / pitfalls，
+#      裁剪后 lint 会把**每一个**热区文档判成孤儿（实测 18 个里 6 个直接报孤儿），
+#      脚本 exit 1 —— **裁剪反而把项目弄红了**，而用户只是照 README 跑了一条命令。
+# 所以：① 先算出剥离后的 INDEX 全文；② 再删目录；③ 最后才替换 INDEX。
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+printf '%s\n' "$pats" > "$tmp/pats"
+grep -v -F -f "$tmp/pats" "$KEEL/INDEX.md" > "$tmp/idx.new" 2>/dev/null || true
+stripped=$(( $(wc -l < "$KEEL/INDEX.md") - $(wc -l < "$tmp/idx.new") ))
+
 echo "── 1. 待裁剪的按需层"
 found=0
 for l in $LAYERS; do
@@ -49,10 +64,6 @@ done
 [ "$found" -eq 0 ] && echo "   （没有按需层可裁：已经是最小集）"
 
 echo "── 2. 剥离 INDEX.md 里指向已裁层的路由行（否则留死链）"
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
-printf '%s\n' "$pats" > "$tmp/pats"
-grep -v -F -f "$tmp/pats" "$KEEL/INDEX.md" > "$tmp/idx.new" 2>/dev/null || true
-stripped=$(( $(wc -l < "$KEEL/INDEX.md") - $(wc -l < "$tmp/idx.new") ))
 if [ "$stripped" -gt 0 ]; then
   if [ "$APPLY" -eq 1 ]; then
     cp "$KEEL/INDEX.md" "$KEEL/INDEX.md.keelbak" && mv "$tmp/idx.new" "$KEEL/INDEX.md"

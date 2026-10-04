@@ -30,7 +30,29 @@ import sys
 
 PROTOCOL_FALLBACK = "2024-11-05"
 SERVER_NAME = "keel"
-SERVER_VERSION = "3.1.0"
+
+
+def _read_version(keel_dir):
+    """版本号从 keel/INDEX.md 的 keel-version 读——**它是唯一真源**（ADR 0010）。
+
+    原实现在这里硬编码 "3.1.0"，到 v3.4.0 时已落后三个版本：
+    MCP 客户端看到的 serverInfo 与实际装到的版本对不上，
+    而 §7.1 的 SSOT 原则说「每类事实只有一个定义位置」。
+    读不到就回落到 "0.0.0-unknown"——**宁可显式说不知道，不报一个假版本**。
+    """
+    try:
+        p = os.path.join(keel_dir, "INDEX.md")
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("keel-version:"):
+                    v = line.split(":", 1)[1].strip()
+                    if v:
+                        return v
+    except Exception:
+        pass
+    return "0.0.0-unknown"
+
+
 URI_INDEX = "keel://index"
 URI_CONSTITUTION = "keel://constitution"
 URI_NOW = "keel://now"
@@ -130,7 +152,7 @@ def handle(keel, msg):
             result = {
                 "protocolVersion": params.get("protocolVersion") or PROTOCOL_FALLBACK,
                 "capabilities": {"resources": {"listChanged": False}},
-                "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+                "serverInfo": {"name": SERVER_NAME, "version": _read_version(keel)},
             }
         elif method == "resources/list":
             result = {"resources": list_resources(keel)}
