@@ -210,7 +210,7 @@ if anchor_present; then
 
 日常三个命令：
   bash keel/checks/keel-lint.sh keel    # 一致性校验：0 fail 才放行
-  bash keel/checks/test-lint.sh         # lint 自测：38 用例 + 1 元检查
+  bash keel/checks/test-lint.sh         # lint 自测：41 用例 + 1 元检查
   bash keel/checks/load-estimate.sh 关键词  # 本轮要读多少字节？超预算即非零退出
 EOF
 else
@@ -236,7 +236,7 @@ else
 
 日常三个命令：
   bash keel/checks/keel-lint.sh keel    # 一致性校验：0 fail 才放行
-  bash keel/checks/test-lint.sh         # lint 自测：38 用例 + 1 元检查
+  bash keel/checks/test-lint.sh         # lint 自测：41 用例 + 1 元检查
   bash keel/checks/load-estimate.sh 关键词  # 本轮要读多少字节？超预算即非零退出
 EOF
 fi

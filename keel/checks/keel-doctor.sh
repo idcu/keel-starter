@@ -111,7 +111,10 @@ echo
 # 4. 判据本身能不能判死（**这一项最容易被跳过，也最重要**）
 printf '%s' "4. 判据自检"
 if [ -f "$KEEL/checks/test-lint.sh" ]; then
-  echo "⏳ 跑全量自测要几分钟（38 个故障注入 + 元检查 + 文档一致性）…"
+  #用例数**从自测脚本里数出来**，不硬编码——硬编码过一次就漂过一次（38 → 41）。
+  # 判据能抓文档滞后，但抓不到脚本里的一句文案；能自动推导的就不该写死。
+  _nc=$(grep -c '^@case(' "$KEEL/checks/test-lint.py" 2>/dev/null || echo 0)
+  echo "⏳ 跑全量自测要几分钟（${_nc} 个故障注入 + 元检查 + 文档一致性）…"
   echo "     现在跑：cd $ROOT && bash keel/checks/test-lint.sh"
   echo "     它验的是「你手上的 lint 到底能不能判死它声称能判死的问题」——将来你改检查项时，它是唯一护栏。"
 else
