@@ -33,6 +33,31 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# ---------- 零 stderr 噪声（ADR 0014）----------
+# 设计稿 §9.3 声称自测达到"零 stderr 噪声"。此前那是**描述性的**——
+# stderr 被捕获（run_lint）也被打印，却从没有任何一处断言它为空。
+# 本列表把那条描述变成判据。
+#
+# 为什么需要豁免：判据一旦生效，**任何**环境噪声都会让套件变红，
+# 而"变红的套件"比"没有套件"更糟（§10.4 的推论）——它会被习惯性忽略，
+# 于是真错误也一起被忽略。所以豁免是判据的**组成部分**，不是例外。
+#
+# 纪律（防止白名单变垃圾桶）：
+#   ① 每条必须写明**为什么它是环境噪声、不是 lint 的问题**；
+#   ② 命中时**必须打印**"本次豁免了哪几条"，不许静默；
+#   ③ 新增条目要能回答"为什么不改 lint 就能消掉它"。
+STDERR_ALLOW = [
+    # 本机 PATH 上的安全删除垫片（…/shim/safe-bin/{rm,rmdir,unlink}）拒绝带盘符的
+    # 路径，导致 keel-lint.sh:63 的 `trap 'rm -rf "$tmp"'` 被拦。**不是 Keel 所发**
+    # （grep -rn SAFE_DELETE keel/checks/keel-lint.sh = 0 命中），见坑
+    # safe-delete-shim-blocks-cleanup。
+    #
+    # 这里豁免整个 `SAFE_DELETE_*` 前缀而不是逐条枚举：该垫片有多个变体
+    # （BULK_CONFIRM_REQUIRED / INVALID_PATH / …），逐条加会让白名单变成垃圾桶，
+    # 而它们**同源、同因、同解**——换环境就没了。
+    "SAFE_DELETE_",
+]
 LINT = os.path.join(HERE, "keel-lint.sh")
 BUDGET_SRC = os.path.join(HERE, "budget.env")
 
@@ -488,6 +513,7 @@ def main():
     print("=" * 76)
 
     ok = bad = 0
+    stderr_noise_log = []   # 收集全部非空 stderr（ADR 0014），末尾统一判一次
     for cid, name, ref, expect, want_rc, fn in CASES:
         d = os.path.join(root, cid)
         shutil.copytree(base, d)
@@ -496,6 +522,9 @@ def main():
         fails = re.findall(r"❌.*", out)
         warns = re.findall(r"⚠️.*", out)
         lines = fails + warns
+        # 去重后收集：同一台机器上 38 例通常是同一条环境噪声刷屏
+        for ln in {l.strip() for l in err.splitlines() if l.strip()}:
+            stderr_noise_log.append(ln)
 
         if expect:
             hit = all(any(e in ln for ln in lines) for e in expect)
@@ -518,6 +547,26 @@ def main():
                 print("        （无任何 ❌/⚠️ 输出）")
 
     print("=" * 76)
+    # ---------- 零 stderr 噪声（ADR 0014）----------
+    # 放在这里而不是每例中间：噪声是**环境级**的（同一台机器每例都一样），
+    # 逐例判会刷 38 行同样的错，把真信号淹掉。判一次、豁免一次、报一次。
+    noise = stderr_noise_log or []
+    allowed = [n for n in noise if any(a in n for a in STDERR_ALLOW)]
+    unexpected = [n for n in noise if n not in allowed]
+    if unexpected:
+        print("[FAIL] NOISE stderr 有未豁免噪声    %d 条，例：%s"
+              % (len(unexpected), unexpected[0][:120]))
+        bad += 1
+    else:
+        # 豁免条数**打印出来**：白名单一旦静默就等于没有判据（ADR 0014）
+        if allowed:
+            uniq = sorted(set(allowed))
+            print("[PASS] NOISE stderr 噪声已豁免      %d 条（去重 %d 类，例：%s）"
+                  % (len(allowed), len(uniq), uniq[0][:90]))
+        else:
+            print("[PASS] NOISE stderr 零噪声          %d 例全部无 stderr" % len(CASES))
+        ok += 1
+    print("=" * 76)
     doc_ok, doc_msg = check_doc_consistency()
     if doc_ok is None:
         print("[SKIP] DOC  脚本与文档一致性          %s" % doc_msg)
@@ -527,10 +576,13 @@ def main():
             bad += 1
 
     print("=" * 76)
+    # 分母要说清：CASES 是故障注入用例，NOISE 是元检查（ADR 0014）——
+    # 两者都算"检查"，但不同类，混在一个分母里会让人误读成"多了 1 个用例"。
+    total = len(CASES) + 1   # +1 = NOISE 元检查
     if bad == 0:
-        print("✅ 自测通过：%d/%d 例" % (ok, len(CASES)))
+        print("✅ 自测通过：%d/%d（%d 用例 + 1 元检查）" % (ok, total, len(CASES)))
     else:
-        print("❌ 自测失败：%d 例未通过（共 %d 例）" % (bad, len(CASES)))
+        print("❌ 自测失败：%d 项未通过（共 %d 项）" % (bad, total))
     if keep:
         print("   临时目录保留：%s" % root)
     else:

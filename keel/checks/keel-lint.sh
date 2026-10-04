@@ -605,9 +605,19 @@ while IFS= read -r f; do
   case "$rel" in pitfalls/*) ;; *) continue ;; esac
   base_set "$f"; case "$BASE" in INDEX.md|_template*) continue ;; esac
   fmq_set "$f" triggers; t=$REPLY
+  # 已蒸馏的不再提醒（v3.4.4）：`status: distilled` 就是"这条已被提炼进宪法"的标记，
+  # 它的存在意义就是让这条告警停下来——实测它已上提为宪法硬约束第 6 条，
+  # 却因为判据只看 triggers 而一直报，是**误报**。
+  # §7.4 的流程是「triggers ≥ 3 → 提醒 → 提炼 + 置 distilled」，
+  # 所以"是否已蒸馏"必须参与判断，否则流程走不到终点。
+  fmq_set "$f" status; st=$REPLY
   case "${t:-0}" in
     ''|*[!0-9]*) [ -n "${t:-}" ] && warn_msg "triggers 非数字: $rel" ;;
-    *) [ "${t:-0}" -ge "$DISTILL_AT" ] && warn_msg "待蒸馏（triggers=${t} ≥ ${DISTILL_AT}）: $rel" ;;
+    *)
+      if [ "${t:-0}" -ge "$DISTILL_AT" ] && [ "$st" != "distilled" ]; then
+        warn_msg "待蒸馏（triggers=${t} ≥ ${DISTILL_AT}）: $rel"
+      fi
+      ;;
   esac
 done < <(hot_files)
 
