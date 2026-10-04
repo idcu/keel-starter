@@ -97,7 +97,21 @@ base_set() { BASE="${1##*/}"; }
 # 做法：文件清单先落成一份 NUL 分隔的清单，再整体喂给 awk / wc。
 # 语义不变——同样的输入、同样的判据、同一套报错文案；只是把 N 次进程换成 1 次。
 
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+# 临时目录：**创建后立刻归一化成 POSIX 路径**再往下用，否则清理在部分环境下静默失败。
+# 起因（坑 safe-delete-shim-blocks-cleanup）：Windows 上 `mktemp -d` 返回
+# `C:\Users\...\Temp/tmp.XXXXXXXX`——**含盘符且混用两种分隔符**，本身就是畸形路径。
+# PATH 前段的安全删除垫片按规则拒绝内嵌盘符 → trap 的 `rm -rf` 被拒（rc=1）→
+# 每次 lint 都在 %TEMP% 留一个目录（历史实测堆积 301 个）。
+# 修法不是"让判据闭嘴"（那是迎合环境），而是消除路径表示的歧义。
+# 用 `pwd -P`（POSIX 平台与 Git Bash 都有，不依赖 MSYS 专有的 -W）：
+# 它给出规范的绝对路径，实测垫片放行、目录确实被删。
+# 注意：`pwd` 失败时**不赋空值**——那样trap 会去删空路径，而 tmp 下游文件也会跟着失效。
+tmp=$(mktemp -d)
+if _tp=$(cd "$tmp" 2>/dev/null && pwd -P 2>/dev/null) && [ -n "$_tp" ]; then
+  tmp="$_tp"
+fi
+unset _tp
+trap 'rm -rf "$tmp"' EXIT
 # 用临时文件收集结果：兼容 bash 3.2（case 不能直接出现在 $() 内），也避开管道子 shell 吞掉 fail 计数
 deadf="$tmp/dead"; refd="$tmp/refd"; longf="$tmp/long"; idxbad="$tmp/idxbad"; edges="$tmp/edges"; pitmiss="$tmp/pitmiss"; pitmisslist="$tmp/pitmisslist"
 
@@ -667,6 +681,45 @@ for h in pre-commit commit-msg; do
   if [ ! -f "$hf" ]; then fail_msg "缺闭环钩子本体: checks/hooks/$h"
   elif [ ! -x "$hf" ]; then fail_msg "闭环钩子不可执行（需 chmod +x）: checks/hooks/$h"; fi
 done
+
+# 段 14（v3.4.5）：版本声明的三处副本必须一致。
+#
+# 为什么加这项：ADR 0010 立了"版本声明与可获取必须同时成立"，
+# 发布仓 CI 也有 CHANGELOG 检查——**但两者都只存在于发布仓**。
+# 2026-10-04 实测发现：keel-version 已到 3.4.4，CHANGELOG 最新小节还停在
+# 3.4.2（缺两节 → CI 必然 exit 1），两仓 README 徽章停在 3.3.8。
+# **判据存在却两周无人看**，这正是本项目引用的 Lint Leakage（62%）在自己身上复现。
+#
+# 所以这里补的是**机制性修复**：把"发布后门面会漂"从一次性补正变成判死。
+# 三处副本任一滞后即 fail——**价值不在补上这一版，在拦住下一次**。
+#
+# 适用范围的诚实说明（§9.5 同类边界）：
+#   -纯模板安装的用户项目里没有 CHANGELOG/根 README → 跳过，不误判；
+#   - 只查"副本存在时是否一致"，不负责生成它们（生成是发布脚本的事）。
+VER_IDX="$KEEL_DIR/INDEX.md"
+if [ -f "$VER_IDX" ]; then
+  _v=$(sed -n 's/^keel-version:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$VER_IDX" | head -1)
+  case "${_v:-}" in
+    ""|*[!0-9.]*) ;;# 缺失/非法：段 2 已在管，这里不重复报
+    *)
+      # 副本一：根 CHANGELOG 的当期小节。发布仓与项目仓根都有。
+      _root=$(dirname "$KEEL_DIR")
+      _cl="$_root/CHANGELOG.md"
+      if [ -f "$_cl" ]; then
+        grep -qE "^## ${_v} —" "$_cl" \
+          || fail_msg "CHANGELOG.md 缺 ${_v} 小节（版本已声明 ${_v}，用户装不到/读不到这次变更；ADR 0010）"
+      fi
+      # 副本二：README 徽章里的版本号。只在写了徽章时查。
+      for _rd in "$_root/README.md" "$KEEL_DIR/README.md"; do
+        [ -f "$_rd" ] || continue
+        _badge=$(grep -o 'keel--version-[0-9][0-9.]*' "$_rd" 2>/dev/null | head -1 | sed 's/^keel--version-//')
+        [ -n "${_badge:-}" ] || continue
+        [ "$_badge" = "$_v" ] || fail_msg "README 徽章版本 ${_badge} 与 keel-version ${_v} 不一致（§9.1-14）: ${_rd#"$PWD"/}"
+      done
+      ;;
+  esac
+  unset _v _root _cl _rd _badge
+fi
 
 # 自报耗时并对照 LINT_SECONDS（ADR 0008）：
 # **只告警不 fail**——机器慢不等于文件错。把性能当 fail 会让人在慢机器上

@@ -49,7 +49,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 #   ③ 新增条目要能回答"为什么不改 lint 就能消掉它"。
 STDERR_ALLOW = [
     # 本机 PATH 上的安全删除垫片（…/shim/safe-bin/{rm,rmdir,unlink}）拒绝带盘符的
-    # 路径，导致 keel-lint.sh:63 的 `trap 'rm -rf "$tmp"'` 被拦。**不是 Keel 所发**
+    # 路径，导致 keel-lint.sh 里 `trap 'rm -rf "$tmp"'` 被拦。**不是 Keel 所发**
+    # （不写行号：行号本身会随脚本改动漂移，写死就等于给自己埋一个陈旧引用）
     # （grep -rn SAFE_DELETE keel/checks/keel-lint.sh = 0 命中），见坑
     # safe-delete-shim-blocks-cleanup。
     #
@@ -393,6 +394,31 @@ def c20(d):
 @case("36", "缺闭环钩子本体（§10.4 铁律：缺一，闭环不成立）", "§9.1-16", ["缺闭环钩子本体"])
 def c36(d):
     os.remove(os.path.join(d, "keel/checks/hooks/commit-msg"))
+
+
+# ---------------- 版本副本一致（§9.1-17） ----------------
+# 这一项是本项目自身的 Lint Leakage 修复：ADR 0010 的 CI 检查只存在于
+# 发布仓、且两周无人查看，实测 keel-version 到3.4.4 而 CHANGELOG 停在 3.2。
+# **判据存在却没人看= 没有判据**，故把一致性补成第 17 项。
+# 基线里没有 CHANGELOG / README（纯模板安装态），所以第 17 项应当**跳过不误判**——
+# 这本身就是一个必须验的合法基线：副本不存在时不能凭空fail。
+@case("39", "版本副本一致（基线无 CHANGELOG/README → 应跳过不误判）", "§9.1-17", [], rc=0)
+def c39(d):
+    # 故意什么都不改：基线本就无 CHANGELOG / README，
+    # 若第 17 项在这里报fail，说明"副本不存在"被当成了"副本不一致"。
+    return
+
+
+@case("40", "CHANGELOG 缺当期版本小节（声明了却没写变更）", "§9.1-17", ["CHANGELOG.md 缺"])
+def c40(d):
+    write(os.path.join(d, "CHANGELOG.md"),
+          "# CHANGELOG\n\n## 1.0.0 — 2026-01-01\n\n旧的远期版本。\n")
+
+
+@case("41", "README 徽章版本与 keel-version 不一致", "§9.1-17", ["README 徽章版本"])
+def c41(d):
+    write(os.path.join(d, "README.md"),
+          "# 项目\n\n[![keel-version](https://img.shields.io/badge/keel--version-9.9.9-000000)](keel/INDEX.md)\n")
 
 
 # ---------------- 告警（warn，不应导致失败） ----------------

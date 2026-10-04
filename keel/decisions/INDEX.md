@@ -15,7 +15,7 @@ keywords: [决策, ADR, 索引, 性能, 批量化]
 | 0006 | 单轮加载量进预算真源（BYTES_SESSION）+ load-estimate.sh | active | [0006-session-load-budget.md](0006-session-load-budget.md) |
 | 0007 | 兑现 MCP 只读落点，并把语义检索做成接入位 | active | [0007-mcp-readonly-and-retrieval-slot.md](0007-mcp-readonly-and-retrieval-slot.md) |
 | 0008 | 把 lint 的 per-file fork 批量化（319s→97s），并给 lint 自身设时限预算 | active | [0008-batch-fork-and-time-budget.md](0008-batch-fork-and-time-budget.md) |
-| 0009 | 遵守率只测客观事实，不采信 AI 自报（全赛道无人实现此指标） | active | [0009-compliance-rate-objective-only.md](0009-compliance-rate-objective-only.md) |
+| 0009 | 遵守率：口径与数据源（v3.4.5 合并原 0011 回填不进分母）；取证沉 [archive/0009-evidence.md](archive/0009-evidence.md) | active | [0009-compliance-rate-objective-only.md](0009-compliance-rate-objective-only.md) |
 | 0010 | 版本声明与版本可获取必须同时成立（tag 缺失让 --ref 失效） | active | [0010-version-declared-and-fetchable.md](0010-version-declared-and-fetchable.md) |
-| 0011 | 历史提交可回填，但回填出来的是"存量合规率"，不进遵守率的分母 | active | [0011-backfill-is-not-compliance-rate.md](0011-backfill-is-not-compliance-rate.md) |
+| ~~0011~~ | 已并入 0009（回填不进分母）——原文沉 [archive/](archive/) | archived | [archive/](archive/) |
 
