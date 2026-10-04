@@ -52,6 +52,18 @@ yaml_val() { sed -E "s/^#.*$//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//"; }
 fm_val() { fm_block "$1" | grep -m1 "^$2:" | sed -E "s/^$2:[[:space:]]*//" | yaml_val; }
 to_epoch() { date -j -f "%Y-%m-%d" "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null || true; }
 
+# ---------- 性能：零 fork 的取值方式（v3.3.9 / ADR 0013）----------
+# 实测（Windows/Git Bash，N=30）：**`v=$(纯 shell 函数)` 本身就要 ~100ms**，
+# 因为命令替换会开一个子 shell——**与函数体内有没有外部命令无关**。
+# 直接调用（不取返回值）是 ~0ms；用全局变量回传也是 ~0ms。
+# 全脚本原有 30 个 `$(rel_of|basename|fmq|…)` 站点 × 39 文件 ≈ 1,170 次 fork ≈ 117s，
+# 占实测 142s 的大头（ADR 0008 只消掉了真外部命令那层，没消掉这层）。
+#
+# 所以下面每个"取 X"函数都配一个 **setter 版**：结果写进 REPLY / REL / BASE，
+# 调用处不写 `$(...)`。**语义、判据、报错文案一字不改**——只换传值方式。
+rel_set() { REL="${1#"$KEEL_DIR"/}"; }
+base_set() { BASE="${1##*/}"; }
+
 # ---------- 性能：把 per-file 的 fork 批量化（v3.2）----------
 # 动因：实测 24 个文档的目录，单次 lint 要 319 秒（Windows / Git Bash）。
 # 根因不是检查本身复杂，而是**进程创建成本**——单次 fork 在该环境约 370ms，
@@ -163,6 +175,21 @@ fmq() {
   done
   return 0
 }
+# 零 fork 版：结果写进 REPLY（未命中时为空，与 fmq 打印空串的行为一致）
+fmq_set() {
+  REPLY=""
+  [ -n "$FMQ_RAW" ] || return 0
+  _want="$1	$2	"
+  _rest="$FMQ_RAW"
+  while [ -n "$_rest" ]; do
+    _line="${_rest%%$KEEL_NL*}"
+    if [ "$_line" = "$_rest" ]; then _rest=""; else _rest="${_rest#*$KEEL_NL}"; fi
+    case "$_line" in
+      "$_want"*) REPLY="${_line#"$_want"}"; return 0 ;;
+    esac
+  done
+  return 0
+}
 # fmhas <文件> <键>：字段是否存在（值可为空，故与 fmq 分开判断）
 fmhas() {
   [ -n "$FMQ_RAW" ] || return 1
@@ -225,7 +252,7 @@ if [ "$HOTN" -gt 0 ]; then
     [ -n "${f:-}" ] || continue
     [ "${f##*/}" = "total" ] && continue
     case "$n" in ''|*[!0-9]*) continue ;; esac
-    rel=$(rel_of "$f")
+    rel_set "$f"; rel=$REL
     case "$rel" in
       */INDEX.md)          lim=$MAX_DOMAIN_INDEX; blim=$BYTES_DOMAIN_INDEX ;;
       INDEX.md)            lim=$MAX_INDEX;        blim=$BYTES_INDEX ;;
@@ -265,9 +292,9 @@ fi
 
 echo "── 2. frontmatter：存在性 / 字段 / 行数 / 字节"
 while IFS= read -r f; do
-  base=$(basename "$f")
+  base_set "$f"; base=$BASE
   case "$base" in _template*) continue ;; esac
-  rel=$(rel_of "$f")
+  rel_set "$f"; rel=$REL
   # 存在性与闭合：仍需读首行与 fm 结束行，各 1 次 awk（可与字段查表合并，此处保持独立以免耦合）
   if [ "$(head -1 "$f")" != "---" ]; then fail_msg "缺 frontmatter: $rel"; continue; fi
   end=$(awk 'NR==1{next} /^---$/{print NR; exit}' "$f" 2>/dev/null)
@@ -293,32 +320,32 @@ done < "$HOTLINES"
 
 echo "── 3. 值域与格式（status / severity / keywords / last-verified / triggers）"
 while IFS= read -r f; do
-  base=$(basename "$f")
+  base_set "$f"; base=$BASE
   case "$base" in _template*) continue ;; esac
-  rel=$(rel_of "$f")
+  rel_set "$f"; rel=$REL
   fmhas "$f" status || continue
-  st=$(fmq "$f" status)
+  fmq_set "$f" status; st=$REPLY
   case "${st:-}" in
     active|distilled|archived|"") ;;
     *) fail_msg "status 值域非法（${st}）: $rel" ;;
   esac
-  lv=$(fmq "$f" last-verified)
+  fmq_set "$f" last-verified; lv=$REPLY
   if [ -n "${lv:-}" ]; then
     case "$lv" in
       [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
       *) fail_msg "last-verified 非 YYYY-MM-DD（${lv}）: $rel" ;;
     esac
   fi
-  kw=$(fmq "$f" keywords)
+  fmq_set "$f" keywords; kw=$REPLY
   case "${kw:-}" in ""|"[]"|"[ ]") fail_msg "keywords 为空: $rel" ;; esac
   case "$rel" in
     pitfalls/*)
-      sv=$(fmq "$f" severity)
+      fmq_set "$f" severity; sv=$REPLY
       case "${sv:-}" in
         P0|P1|P2|P3|"") ;;
         *) fail_msg "severity 值域非法（${sv}）: $rel" ;;
       esac
-      tg=$(fmq "$f" triggers)
+      fmq_set "$f" triggers; tg=$REPLY
       case "${tg:-}" in
         ''|*[!0-9]*) [ -n "${tg:-}" ] && fail_msg "triggers 非数字（${tg}）: $rel" ;;
       esac
@@ -328,7 +355,7 @@ done < <(hot_files)
 
 echo "── 4. 命名（kebab-case / 热区禁日期）"
 while IFS= read -r f; do
-  base=$(basename "$f"); rel=$(rel_of "$f")
+  base_set "$f"; base=$BASE; rel_set "$f"; rel=$REL
   # 固定名豁免：根级入口/地图/宪法/术语/NOW 由 §3.2 定义，不受 kebab-case 约束
   case "$base" in
     _template*|INDEX.md|CONSTITUTION.md|ARCHITECTURE.md|GLOSSARY.md|NOW.md|NOW-*.md) continue ;;
@@ -342,7 +369,7 @@ echo "── 5. 域索引：纯表格 / 坑条目登记"
 # 5a. 任何域索引（*/INDEX.md）只允许表格行；根 INDEX.md 例外（它是唯一入口，见 §5.1）
 : > "$idxbad"
 while IFS= read -r x; do
-  xrel=$(rel_of "$x")
+  rel_set "$x"; xrel=$REL
   case "$xrel" in */INDEX.md) ;; *) continue ;; esac
   awk -v R="$xrel" '
     NR==1 && $0=="---" { f=1; next }
@@ -356,9 +383,9 @@ if [ -s "$idxbad" ]; then sed -n '1,6p' "$idxbad"; fail=1; fi
 # 5b. 坑条目必须登记进 pitfalls/INDEX.md
 if [ -f "$KEEL_DIR/pitfalls/INDEX.md" ]; then
   while IFS= read -r p; do
-    b=$(basename "$p")
+    base_set "$p"; b=$BASE
     case "$b" in INDEX.md|_template*) continue ;; esac
-    grep -qF "$b" "$KEEL_DIR/pitfalls/INDEX.md" || fail_msg "坑条目未登记进 pitfalls/INDEX.md: $(rel_of "$p")"
+    grep -qF "$b" "$KEEL_DIR/pitfalls/INDEX.md" || { rel_set "$p"; fail_msg "坑条目未登记进 pitfalls/INDEX.md: $REL"; }
   done < <(find "$KEEL_DIR/pitfalls" -name '*.md' 2>/dev/null)
 else
   fail_msg "缺 pitfalls/INDEX.md"
@@ -485,7 +512,7 @@ if [ -s "$refd.raw" ]; then
   done < "$refd.raw"
 fi
 while IFS= read -r f; do
-  base=$(basename "$f")
+  base_set "$f"; base=$BASE
   case "$base" in INDEX.md|_template*) continue ;; esac
   grep -qxF "$f" "$refd" || fail_msg "孤儿（未被任何热区文档链接引用）: ${f#"$KEEL_DIR"/}"
 done < "$HOTLINES"
@@ -493,11 +520,12 @@ done < "$HOTLINES"
 echo "── 10. 陈旧（last-verified / NOW updated；豁免类目见 §9.4）"
 today=$(date +%s)
 while IFS= read -r f; do
-  rel=$(rel_of "$f")
-  case "$(basename "$f")" in _template*) continue ;; esac
+  rel_set "$f"; rel=$REL
+  base_set "$f"; case "$BASE" in _template*) continue ;; esac
   case "$rel" in decisions/*) continue ;; esac            # ADR 定稿即不可变，见 §9.4
-  [ "$(fmq "$f" stale-check)" = "off" ] && continue     # 逃生口，需在 decisions/ 留理由
-  d=$(fmq "$f" last-verified)
+  fmq_set "$f" stale-check
+  [ "$REPLY" = "off" ] && continue     # 逃生口，需在 decisions/ 留理由
+  fmq_set "$f" last-verified; d=$REPLY
   if [ -n "$d" ]; then
     e=$(to_epoch "$d")
     if [ -n "$e" ]; then
@@ -508,7 +536,7 @@ while IFS= read -r f; do
     fi
   fi
   case "$rel" in NOW*.md|*/NOW*.md)
-    u=$(fmq "$f" updated)
+    fmq_set "$f" updated; u=$REPLY
     if [ -z "$u" ]; then fail_msg "NOW 缺 updated: $rel"
     else
       e=$(to_epoch "$u")
@@ -518,14 +546,18 @@ while IFS= read -r f; do
 done < <(hot_files)
 
 echo "── 11. 坑条目（三段式 + 蒸馏阈值）"
+# 刻意保持逐文件 3 次 grep：曾试过批量化（一次 awk + ENDFILE），
+# 但 ENDFILE 规则在"跳过"的文件上同样触发，**过滤与 ENDFILE 不可靠地共存**——
+# 实测把 12 条真坑全部漏判、反而报出 39 个非坑文件。
+# 收益只有 3×坑数×fork（12 坑 ≈ 3.6s），不值得为它引入误判风险（ADR 0013 原则：语义优先）。
 while IFS= read -r f; do
-  rel=$(rel_of "$f")
+  rel_set "$f"; rel=$REL
   case "$rel" in pitfalls/*) ;; *) continue ;; esac
-  case "$(basename "$f")" in INDEX.md|_template*) continue ;; esac
+  base_set "$f"; case "$BASE" in INDEX.md|_template*) continue ;; esac
   for h in "## 症状" "## 根因" "## 正解"; do
     grep -qF -- "$h" "$f" || fail_msg "坑条目缺失【${h}】: $rel"
   done
-  t=$(fmq "$f" triggers)
+  fmq_set "$f" triggers; t=$REPLY
   case "${t:-0}" in
     ''|*[!0-9]*) [ -n "${t:-}" ] && warn_msg "triggers 非数字: $rel" ;;
     *) [ "${t:-0}" -ge "$DISTILL_AT" ] && warn_msg "待蒸馏（triggers=${t} ≥ ${DISTILL_AT}）: $rel" ;;
@@ -535,7 +567,7 @@ done < <(hot_files)
 echo "── 12. 状态机（frozen 契约冻结 / 例外计数）"
 IDX="$KEEL_DIR/INDEX.md"
 if [ -f "$IDX" ]; then
-  ps=$(fmq "$IDX" project-state)
+  fmq_set "$IDX" project-state; ps=$REPLY
   case "${ps:-}" in
     frozen)
       if command -v git >/dev/null 2>&1 && git -C "$KEEL_DIR" rev-parse --git-dir >/dev/null 2>&1; then
@@ -554,8 +586,9 @@ if [ -s "$DECL" ]; then
   mon=$(date '+%Y-%m'); exc=0
   while IFS= read -r d; do
     case "${d##*/}" in _template*) continue ;; esac   # 模板不是真实记录（§3.4 豁免）
-    [ "$(fmq "$d" type)" = "exception" ] || continue
-    made=$(fmq "$d" created)
+    fmq_set "$d" type
+    [ "$REPLY" = "exception" ] || continue
+    fmq_set "$d" created; made=$REPLY
     if [ -z "${made:-}" ]; then fail_msg "例外决策缺 created 字段: ${d#"$KEEL_DIR"/}"; continue; fi
     case "$made" in "$mon"*) exc=$((exc + 1)) ;; esac
   done < "$DECL"
@@ -563,7 +596,7 @@ if [ -s "$DECL" ]; then
   # 取代关系：superseded-by 必须指向存在的文件（ADR 靠"被谁取代"表达时效，而非 last-verified）
   while IFS= read -r d; do
     case "${d##*/}" in _template*) continue ;; esac     # 模板里的占位值不算数
-    sb=$(fmq "$d" superseded-by)
+    fmq_set "$d" superseded-by; sb=$REPLY
     [ -n "${sb:-}" ] || continue
     case "$d" in */*) sbdir=${d%/*} ;; *) sbdir="." ;; esac
     [ -e "$sbdir/$sb" ] || fail_msg "superseded-by 指向不存在的文件（${sb}）: ${d#"$KEEL_DIR"/}"
