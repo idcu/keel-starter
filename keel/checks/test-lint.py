@@ -397,7 +397,12 @@ def build_base(dst, budget):
 
 
 def run_lint(cwd):
-    p = subprocess.run(["bash", LINT, "keel"], cwd=cwd,
+    # 解释器必须用绝对路径：Windows 上裸 "bash" 会被解析成
+    # C:\Windows\system32\bash.exe（WSL 垫片），它只打印安装提示就 exit 1，
+    # 于是每次调用都拿到零 lint 输出、全部用例假失败，且报"未通过"而非报错。
+    # 教训见 pitfalls/meta/harness-invokes-bare-bash.md（判据不得隐含假设运行环境）。
+    bash = shutil.which("bash") or "bash"
+    p = subprocess.run([bash, LINT, "keel"], cwd=cwd,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out = p.stdout.decode("utf-8", "replace")
     err = p.stderr.decode("utf-8", "replace")
