@@ -79,8 +79,12 @@ fi
 echo "── 3. 复核"
 if [ "$APPLY" -eq 1 ]; then
   echo "   剩余热区 md：$(find "$KEEL" -name '*.md' -not -path '*/archive/*' -not -path '*/NOW-history/*' | wc -l | tr -d '[:space:]') 个"
-  # lint 复核放在原目录跑：锚点在 $KEEL/.. ，与裁剪无关
-  if bash "$KEEL/checks/keel-lint.sh" "$KEEL" > "$tmp/lint.out" 2>&1; then
+  # 复核必须**用相对路径**调 lint（v3.4.1 修）：
+  # lint 内部按入参原样拼路径，传绝对路径会让它找 `$KEEL/../AGENTS.md` 之类的
+  # 锚点与相对引用时全部错位 → 实测传绝对路径判 16 条 ❌，传相对路径 0 条。
+  # 这与已登记的坑 `worktree-eol-differs-from-main` 同源（入参形态影响判据）。
+  # 所以这里 cd 到 keel 的**父目录**再跑，与文档里"在项目根跑 lint"的口径一致。
+  if ( cd "$KEEL/.." && bash "$KEEL/checks/keel-lint.sh" "$(basename "$KEEL")" ) > "$tmp/lint.out" 2>&1; then
     echo "   ✅ 裁剪后 keel-lint 通过"
   else
     echo "   ⚠️  裁剪后 keel-lint 未通过（若裁剪前也未通过，与本次无关）："
