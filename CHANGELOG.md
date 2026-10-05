@@ -87,6 +87,8 @@ bash keel/checks/test-lint.sh                    # 全量 41 例 ≈ 15 分钟
   （husky 的 `_/` 委托形态走父目录探测）；`install-hooks.sh` 冲突提示同步；DESIGN §10.4 增共存段
 - **模板身份泄漏修复**：starter 的 CONSTITUTION/NOW 由 Keel 自身实例文本改为占位骨架
   （doctor 三项占位检测现在真能检出）；doctor 第 5 项占位正则收窄
+- **同版本内工具漂移修复**：根/内部 `install.sh` 不一致（CI「两份一致」判据本应拦下）；
+  starter 的 `test-lint.py` 未随 ADR 0016 同步——两处已同步，`--only 39-42` 复验通过
 
 ## 3.4.5 — 2026-10-04
 
