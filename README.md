@@ -2,7 +2,7 @@
 
 [![keel-starter CI](https://github.com/idcu/keel-starter/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel-starter/actions/workflows/keel.yml)
 [![keel CI](https://github.com/idcu/keel/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel/actions/workflows/keel.yml)
-[![keel-version](https://img.shields.io/badge/keel--version-3.4.5-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
+[![keel-version](https://img.shields.io/badge/keel--version-3.4.6-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
 
 > 徽章指向 GitHub 镜像（Gitee 无标准徽章端点）。**发布仓**徽章是产品健康度，**项目仓**徽章守的是
 > "设计稿与脚本不许漂移"这条不变量——两者的关系与镜像同步的有序性见设计稿 §12.3。
@@ -18,6 +18,9 @@ Keel 的模板仓库。它要解决的问题只有一句：
 > **tag 说明**：版本号有两处真源——`keel/INDEX.md` 的 `keel-version` 与本仓的
 > `vX.Y.Z` tag。两者一致（CI 与发布流程保证），`--ref` 认的是 **tag**。
 > 没有 tag 的版本等于不存在：声明了但拉不到。
+
+**第一次来？先看 [TRY-KEEL.md](TRY-KEEL.md)** —— 3 分钟装完并看到你自己项目的真实数字，
+含doctor 五项结果怎么读、常见报错对照表。
 
 ## 一条命令装上
 
@@ -45,7 +48,7 @@ bash keel/checks/keel-doctor.sh
 判据自检怎么跑、还有哪些需要你亲手填。**不修复、不改文件**——诊断与修复分开。
 
 已clone 下来了就直接 `bash install.sh <项目根>`；
-**要固定版本**加 `--ref`（`--ref v3.4.5` 或 `--ref=v3.4.5` 都行）——
+**要固定版本**加 `--ref`（`--ref v3.4.6` 或 `--ref=v3.4.6` 都行）——
 指定了版本拉不到就会**报错并列出可用版本**，不会偷偷给你装 `main`。
 项目里已有 `keel/` 时它走**就地升级**——只补工具链与缺失目录，不覆盖你的
 `INDEX.md` / `NOW.md` / `pitfalls/` / `decisions/`（设计稿 §12.3：升级按字段增量合并）。
@@ -106,7 +109,8 @@ bash keel/checks/test-lint.sh
 ```bash
 # 日常三个
 bash keel/checks/keel-lint.sh keel        # 一致性校验：0 fail 才放行（pre-commit 与 CI 都跑它）
-bash keel/checks/test-lint.sh             # lint 自测：38 例故障注入 + 元检查 + 脚本与文档一致性
+bash keel/checks/test-lint.sh             # lint 自测：41 用例 + 元检查 + 脚本与文档一致性
+bash keel/checks/test-lint.sh --only 6,39-41   # 只跑指定用例（改判据时用，秒级；发版前仍须全量）
 bash keel/checks/install-hooks.sh         # 装钩子（每人 clone 后跑一次，装完自动复核）
 
 # 按需

@@ -91,6 +91,7 @@ if [ "$EXISTING" -eq 1 ]; then
   for f in checks/budget.env checks/keel-lint.sh checks/load-estimate.sh \
            checks/keel-lite.sh checks/verify-hooks.sh checks/install-hooks.sh \
            checks/compliance.sh checks/check-mcp-config.sh checks/keel-doctor.sh \
+           checks/perf-findings.txt \
            checks/mcp/keel-mcp-server.py \
            checks/hooks/pre-commit checks/hooks/commit-msg; do
     if [ -e "$tmp/starter/keel/$f" ]; then
@@ -99,7 +100,8 @@ if [ "$EXISTING" -eq 1 ]; then
       # 漏一个文件的代价实测过：老用户升级后 doctor 脚本不存在，
       # 而白名单不补它**没有任何检查会报**（工具链缺失不在判据覆盖内）。
       case "$f" in
-        checks/keel-doctor.sh) cp -R "$tmp/starter/keel/$f" "$TARGET/keel/$f" && echo "   ↑ 更新 $f（诊断工具总是最新）" ;;
+        checks/keel-doctor.sh|checks/perf-findings.txt)
+          cp -R "$tmp/starter/keel/$f" "$TARGET/keel/$f" && echo "   ↑ 更新 $f（诊断/记录类总是最新）" ;;
         *)
           if [ -e "$TARGET/keel/$f" ]; then
             echo "   · 保留 $f（你的版本）"

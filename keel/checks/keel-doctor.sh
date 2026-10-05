@@ -115,7 +115,10 @@ if [ -f "$KEEL/checks/test-lint.sh" ]; then
   # 判据能抓文档滞后，但抓不到脚本里的一句文案；能自动推导的就不该写死。
   _nc=$(grep -c '^@case(' "$KEEL/checks/test-lint.py" 2>/dev/null || echo 0)
   echo "⏳ 跑全量自测要几分钟（${_nc} 个故障注入 + 元检查 + 文档一致性）…"
-  echo "     现在跑：cd $ROOT && bash keel/checks/test-lint.sh"
+  echo "     全量：bash keel/checks/test-lint.sh"
+  echo "     **只验你刚改的那几条**（秒级，不必等全量）："
+  echo "       bash keel/checks/test-lint.sh --only 06,39-41"
+  echo "     ⚠️ 子集通过**不等于**可以发版——发版前仍须跑全量（漏掉的用例不会报）。"
   echo "     它验的是「你手上的 lint 到底能不能判死它声称能判死的问题」——将来你改检查项时，它是唯一护栏。"
 else
   echo "⚠️ 缺 test-lint.sh（可能被裁剪掉了）——没有自测，改判据就是盲改"

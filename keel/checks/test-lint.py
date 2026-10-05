@@ -518,6 +518,44 @@ def main():
     verbose = "-v" in argv or "--verbose" in argv
     keep = "--keep" in argv
 
+    # v3.4.6：`--only 39,40`（或 `--only 6-9`）跑指定用例子集。
+    # 为什么需要它：全量 41 例 ×单次 lint（Windows 上约 32s）≈ 13 分钟，
+    # **改一条判据时的等待是真成本**——而实际只想验两三个相关用例。
+    # 这是纯筛选，**不改任何判据**（与"抽离慢的那几个检查"不同：
+    # 那种做法会让本地门禁与 CI 不一致，可能漏判）。
+    # 提醒：子集通过**不等于**可以发版——发版前必须跑全量（子集漏掉的用例不会报）。
+    only = None
+    for i, a in enumerate(argv):
+        if a == "--only" and i + 1 < len(argv):
+            only = argv[i + 1]
+            argv = argv[:i] + argv[i + 2:]
+            break
+        if a.startswith("--only="):
+            only = a.split("=", 1)[1]
+            argv = [x for x in argv if x != a]
+            break
+    if only is not None:
+        want = set()
+        for part in only.replace(" ", "").split(","):
+            if not part:
+                continue
+            if "-" in part:
+                try:
+                    a1, a2 = part.split("-", 1)
+                    for n in range(int(a1), int(a2) + 1):
+                        want.add(str(n).zfill(2))
+                except ValueError:
+                    print("❌ --only 区间格式应为 6-9：%s" % part)
+                    return 2
+            else:
+                want.add(part.zfill(2))   # 用例号是补零的两位（"06"），比较前先对齐
+        known = {cid for cid, *_ in CASES}
+        unknown = want - known
+        if unknown:
+            print("❌ 没有这些用例: %s" % ", ".join(sorted(unknown)))
+            print("   可用例号: %s" % ", ".join(sorted(known, key=lambda x: int(x))))
+            return 2
+
     if not os.path.isfile(LINT):
         print("❌ 找不到 %s" % LINT)
         return 1
@@ -530,17 +568,21 @@ def main():
     base = os.path.join(root, "base")
     build_base(base, budget)
 
+    cases = CASES if only is None else [c for c in CASES if c[0] in want]
+
     tools = []
     for t in ("tsort", "git"):
         tools.append("%s:%s" % (t, "有" if shutil.which(t) else "无（相关检查会跳过）"))
 
-    print("keel-lint 自测 · 用例 %d 例 · 临时目录 %s" % (len(CASES), root))
+    print("keel-lint 自测 · 用例 %d 例 · 临时目录 %s" % (len(cases), root))
+    if only is not None:
+        print("  ⚠️ 子集运行（%s）：**发版前仍须跑全量**" % only)
     print("  工具可用性: " + "  ".join(tools))
     print("=" * 76)
 
     ok = bad = 0
     stderr_noise_log = []   # 收集全部非空 stderr（ADR 0014），末尾统一判一次
-    for cid, name, ref, expect, want_rc, fn in CASES:
+    for cid, name, ref, expect, want_rc, fn in cases:
         d = os.path.join(root, cid)
         shutil.copytree(base, d)
         fn(d)
@@ -590,7 +632,7 @@ def main():
             print("[PASS] NOISE stderr 噪声已豁免      %d 条（去重 %d 类，例：%s）"
                   % (len(allowed), len(uniq), uniq[0][:90]))
         else:
-            print("[PASS] NOISE stderr 零噪声          %d 例全部无 stderr" % len(CASES))
+            print("[PASS] NOISE stderr 零噪声          %d 例全部无 stderr" % len(cases))
         ok += 1
     print("=" * 76)
     doc_ok, doc_msg = check_doc_consistency()
@@ -602,11 +644,11 @@ def main():
             bad += 1
 
     print("=" * 76)
-    # 分母要说清：CASES 是故障注入用例，NOISE 是元检查（ADR 0014）——
+    # 分母要说清：cases 是故障注入用例，NOISE 是元检查（ADR 0014）——
     # 两者都算"检查"，但不同类，混在一个分母里会让人误读成"多了 1 个用例"。
-    total = len(CASES) + 1   # +1 = NOISE 元检查
+    total = len(cases) + 1   # +1 = NOISE 元检查
     if bad == 0:
-        print("✅ 自测通过：%d/%d（%d 用例 + 1 元检查）" % (ok, total, len(CASES)))
+        print("✅ 自测通过：%d/%d（%d 用例 + 1 元检查）" % (ok, total, len(cases)))
     else:
         print("❌ 自测失败：%d 项未通过（共 %d 项）" % (bad, total))
     if keep:
