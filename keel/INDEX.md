@@ -1,9 +1,9 @@
 ---
 scope: meta
 status: active
-last-verified: 2026-10-05
+last-verified: 2026-10-06
 keywords: [索引, 入口, 路由]
-keel-version: 3.4.7
+keel-version: 3.4.8
 project-state: exploring     # exploring | architecture-locked | building | frozen
 ---
 
