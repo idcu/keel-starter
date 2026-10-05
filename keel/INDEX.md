@@ -22,7 +22,7 @@ project-state: exploring     # exploring | architecture-locked | building | froz
 
 ## 路由（scope → 入口）
 
-<!-- 规则 1：新增 scope 必须在此加一行。"定位 scope"不允许靠猜。 -->
+<!-- 规则 1：新增 scope 必须在此加一行。"定位 scope"不允许靠猜。待填：把本路由表换成你项目的真实入口。 -->
 
 | scope | 一句话 | 入口 |
 |---|---|---|

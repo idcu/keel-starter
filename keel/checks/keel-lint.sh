@@ -152,8 +152,8 @@ FMQ="$tmp/fmq"      # 查询表：<路径>\t<key>\t<value>
 FMHAS="$tmp/fmhas"  # 每个文件的 fm 原始行（供"字段是否存在"判断）
 if [ "$HOTN" -gt 0 ]; then
   # 一次 awk 扫全部文件，把每个文件的 fm 字段算完落成查询表。
-  # 用 gawk/mawk 的 ENDFILE 在 POSIX awk 上不可用，故先试 ENDFILE 版本，
-  # 产物为空则回落到"逐文件一次 awk"（仍是 24 次而非 500 次 fork）。
+  # 收尾 flush 用 END，**不用 gawk 专有 ENDFILE**——BWK awk（macOS）把它当未定义
+  # 变量、末文件字段静默丢失（坑 awk-gawk-gaps）；产物为空仍回落逐文件版。
   : > "$FMQ"
   XLIST="$HOTLIST"; xrun awk -v OFS='\t' '
     function trim(v) { sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v); return v }
@@ -169,7 +169,7 @@ if [ "$HOTN" -gt 0 ]; then
         if (k ~ /^[A-Za-z0-9_-]+$/ && !(k in val)) { seen[k] = 1; val[k] = yval(trim(substr($0, ci + 1))) } }
       next
     }
-    ENDFILE { for (kk in seen) print pf, kk, val[kk]; delete seen; delete val }
+    END     { for (kk in seen) print pf, kk, val[kk] }
   ' > "$FMQ" 2>/dev/null
   if [ ! -s "$FMQ" ]; then
     : > "$FMQ"
@@ -529,7 +529,7 @@ awk -F'\t' '
     for (i = 1; i <= np; i++) {
       seg = parts[i]
       if (seg == "" || seg == ".") continue
-      if (seg == "..") { sub(/\/[^/]*$/, "", out); continue }
+      if (seg == "..") { sub(/\/[^\/]*$/, "", out); continue }
       out = (out == "" ? seg : out "/" seg)
     }
     return out
@@ -693,8 +693,10 @@ done
 # 所以这里补的是**机制性修复**：把"发布后门面会漂"从一次性补正变成判死。
 # 三处副本任一滞后即 fail——**价值不在补上这一版，在拦住下一次**。
 #
-# 适用范围的诚实说明（§9.5 同类边界）：
-#   -纯模板安装的用户项目里没有 CHANGELOG/根 README → 跳过，不误判；
+# 适用范围的诚实说明（§9.5 同类边界，v3.4.6 收窄触发）：
+#   - 触发条件是「根或 keel/ 的 README 写了 keel 徽章」——徽章 = 自认 keel 发行仓；
+#     真实用户项目（自带自己的 CHANGELOG、无徽章）→ 跳过，不误判
+#     （实测：首个采用方 lytjs 安装当日被旧触发条件误判"缺当期小节"，ADR 0016）。
 #   - 只查"副本存在时是否一致"，不负责生成它们（生成是发布脚本的事）。
 VER_IDX="$KEEL_DIR/INDEX.md"
 if [ -f "$VER_IDX" ]; then
@@ -702,23 +704,28 @@ if [ -f "$VER_IDX" ]; then
   case "${_v:-}" in
     ""|*[!0-9.]*) ;;# 缺失/非法：段 2 已在管，这里不重复报
     *)
-      # 副本一：根 CHANGELOG 的当期小节。发布仓与项目仓根都有。
       _root=$(dirname "$KEEL_DIR")
-      _cl="$_root/CHANGELOG.md"
-      if [ -f "$_cl" ]; then
-        grep -qE "^## ${_v} —" "$_cl" \
-          || fail_msg "CHANGELOG.md 缺 ${_v} 小节（版本已声明 ${_v}，用户装不到/读不到这次变更；ADR 0010）"
-      fi
-      # 副本二：README 徽章里的版本号。只在写了徽章时查。
+      # 副本二（先查）：README 徽章里的版本号。只在写了徽章时查——
+      # 徽章同时是副本一（CHANGELOG）的触发条件：没徽章 = 不是 keel 发行仓。
+      _badge_seen=""
       for _rd in "$_root/README.md" "$KEEL_DIR/README.md"; do
         [ -f "$_rd" ] || continue
         _badge=$(grep -o 'keel--version-[0-9][0-9.]*' "$_rd" 2>/dev/null | head -1 | sed 's/^keel--version-//')
         [ -n "${_badge:-}" ] || continue
+        _badge_seen=1
         [ "$_badge" = "$_v" ] || fail_msg "README 徽章版本 ${_badge} 与 keel-version ${_v} 不一致（§9.1-14）: ${_rd#"$PWD"/}"
       done
+      # 副本一：根 CHANGELOG 的当期小节。仅发行仓（写了徽章）检查。
+      if [ -n "$_badge_seen" ]; then
+        _cl="$_root/CHANGELOG.md"
+        if [ -f "$_cl" ]; then
+          grep -qE "^## ${_v} —" "$_cl" \
+            || fail_msg "CHANGELOG.md 缺 ${_v} 小节（版本已声明 ${_v}，用户装不到/读不到这次变更；ADR 0010）"
+        fi
+      fi
       ;;
   esac
-  unset _v _root _cl _rd _badge
+  unset _v _root _cl _rd _badge _badge_seen
 fi
 
 # 自报耗时并对照 LINT_SECONDS（ADR 0008）：

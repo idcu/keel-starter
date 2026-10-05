@@ -47,9 +47,9 @@ hook_body=0; hook_mount="未挂载"
 if [ -f "$KEEL/checks/hooks/pre-commit" ] && [ -x "$KEEL/checks/hooks/pre-commit" ]; then
   hook_body=1
   if [ -f "$KEEL/checks/verify-hooks.sh" ]; then
-    if (cd "$ROOT" && bash "$KEEL/checks/verify-hooks.sh" "$KEEL" >/dev/null 2>&1); then
+    if (cd "$ROOT" && bash "$KEEL/checks/verify-hooks.sh" "$ROOT" >/dev/null 2>&1); then
       hook_mount="已挂载"
-    elif (cd "$ROOT" && bash "$KEEL/checks/verify-hooks.sh" "$KEEL" --allow-unset >/dev/null 2>&1); then
+    elif (cd "$ROOT" && bash "$KEEL/checks/verify-hooks.sh" "$ROOT" --allow-unset >/dev/null 2>&1); then
       hook_mount="本体在·未挂载"
     fi
   fi
@@ -131,7 +131,7 @@ todo=0
 if grep -qE '<项目名>|<技术栈>|占位' "$KEEL/CONSTITUTION.md" 2>/dev/null; then
   echo "   ☐ keel/CONSTITUTION.md 还是占位——填它（红线 / 人审关卡）"; todo=1
 fi
-if grep -qE '<[^>]+>' "$KEEL/INDEX.md" 2>/dev/null; then
+if grep -qE '<项目名>|待填|占位' "$KEEL/INDEX.md" 2>/dev/null; then
   echo "   ☐ keel/INDEX.md 路由表还有占位——换成你项目的真实入口"; todo=1
 fi
 if [ ! -s "$KEEL/NOW.md" ] || grep -q '待填\|占位' "$KEEL/NOW.md" 2>/dev/null; then

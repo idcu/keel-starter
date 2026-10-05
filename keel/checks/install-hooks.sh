@@ -32,7 +32,8 @@ esac
 cur=$(git -C "$ROOT" config --get core.hooksPath || true)
 if [ -n "${cur:-}" ] && [ "$cur" != "$HOOKS_REL" ]; then
   echo "❌ 本仓库已有 core.hooksPath=${cur}，本脚本不覆盖它。"
-  echo "   请把 keel 的两个钩子并入该目录，或先 git config --unset core.hooksPath 再重跑。"
+  echo "   请把 keel 的两个钩子并入该目录（在框架钩子里调用 keel/checks/hooks/<钩子名>，
+   verify-hooks.sh 认可这种链式挂载，ADR 0017），或先 git config --unset core.hooksPath 再重跑。"
   exit 1
 fi
 

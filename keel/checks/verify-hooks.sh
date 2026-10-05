@@ -8,6 +8,8 @@
 #   是第二种方式：**本体在、但没人装**。
 #   `core.hooksPath` 是仓库级本地配置、不进版本历史，所以"装没装"只能本地验——
 #   本脚本就是那个本地关卡；CI 用 --allow-unset 只验本体（新 clone 天然没装）。
+#   挂载有两种形态（ADR 0017）：直挂（== <keel>/checks/hooks）与链式
+#   （既有钩子框架的钩子文件调用 keel 本体）——链式判定见下方 ②。
 set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -60,7 +62,28 @@ else
         fail_msg "本地未挂载钩子——闭环此刻是静默失效的：跑一次 bash ${WANT%/hooks}/install-hooks.sh"
       fi
     elif [ "$cur" != "$WANT" ]; then
-      fail_msg "core.hooksPath 指向 ${cur}，应为 ${WANT}（冲突处理见 install-hooks.sh）"
+      # v3.4.6（ADR 0017）：链式挂载——core.hooksPath 归既有钩子框架所有
+      # （典型：husky 的 .husky/_），但 git 实际执行的钩子文件、或其**父目录的同名文件**
+      # 里调用了 keel 钩子本体（husky 的委托形态正是 .husky/_ → .husky/<钩子>）。
+      case "$cur" in
+        /*) HOOKDIR="$cur" ;;
+        *)  HOOKDIR="$ROOT/$cur" ;;
+      esac
+      chain_ok=1; chain_at=""
+      for h in pre-commit commit-msg; do
+        hit=""
+        for cand in "$HOOKDIR/$h" "$(dirname "$HOOKDIR")/$h"; do
+          if [ -f "$cand" ] && grep -qF "$WANT/$h" "$cand" 2>/dev/null; then hit="$cand"; break; fi
+        done
+        if [ -n "$hit" ]; then chain_at="$hit"; else chain_ok=0; fi
+      done
+      if [ "$chain_ok" -eq 1 ]; then
+        echo "✅ 链式挂载成立：core.hooksPath=${cur}，两个钩子均调用 keel 本体（例：${chain_at#"$ROOT"/}）"
+      elif [ "$ALLOW_UNSET" -eq 1 ]; then
+        warn_msg "core.hooksPath 指向 ${cur}，未检出链式调用（应为 ${WANT}）——并入说明见 install-hooks.sh"
+      else
+        fail_msg "core.hooksPath 指向 ${cur}，且未检出链式调用 keel 钩子（应为 ${WANT}）——并入说明见 install-hooks.sh"
+      fi
     fi
   fi
 fi

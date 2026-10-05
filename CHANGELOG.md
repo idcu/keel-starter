@@ -75,6 +75,19 @@ bash keel/checks/test-lint.sh                    # 全量 41 例 ≈ 15 分钟
 **41 例自测 + NOISE 元检查 + §9.3 逐字一致 = 42/42 PASS** ·
 两仓 lint **0 fail 0 warn** · **stderr 0 行** · 工具链两仓逐字一致
 
+### 3) 采用日修复（首个外部采用方 lytjs 暴露）
+
+- **macOS BWK awk 兼容 ×2**（P0）：正则字面量 `[^/]` 解析失败 → 段 9 全量误报孤儿；
+  gawk 专有 `ENDFILE` → 末文件字段静默丢失（自测 13/42 假失败）。
+  修法：字符类内 `\/` 转义 + 收尾 flush 改用 `END`。坑：`pitfalls/meta/awk-gawk-gaps.md`
+- **doctor 挂载检查传参修复**：曾把 keel 目录当项目根传给 verify-hooks，
+  挂载检查被整体跳过、假"闭环成立"（同坑 `install-verifies-wrong-dir`）
+- **第 17 项收窄触发**（ADR 0016）：用户项目自带 CHANGELOG 不再误判；自测增至 42 例
+- **链式挂载支持**（ADR 0017）：`verify-hooks.sh` 认可"框架钩子调用 keel 本体"
+  （husky 的 `_/` 委托形态走父目录探测）；`install-hooks.sh` 冲突提示同步；DESIGN §10.4 增共存段
+- **模板身份泄漏修复**：starter 的 CONSTITUTION/NOW 由 Keel 自身实例文本改为占位骨架
+  （doctor 三项占位检测现在真能检出）；doctor 第 5 项占位正则收窄
+
 ## 3.4.5 — 2026-10-04
 
 **一件事：把"发布后门面会漂"从一次性补正变成判据——顺便查清一个被误诊了两轮的问题。**
