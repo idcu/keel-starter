@@ -16,7 +16,7 @@
 `echo "[safe-delete][SAFE_DELETE_INVALID_PATH] …" >&2` 并 `return 64`。
 启用门槛是 `CODEBUDDY_SESSION_ID` / `CLAUDE_SESSION_ID` 至少一个非空。
 
-## 二、为什么 `pwd -P` 而���是 `pwd -W`
+## 二、为什么 `pwd -P` 而不是 `pwd -W`
 
 | 方案 | 输出 | 垫片 |
 |---|---|---|
