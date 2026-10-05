@@ -70,3 +70,32 @@ v3.4.8 尝试 #2（2026-10-05，macOS 本机，keel 仓 44 热区文档）——
   - 落地前必须：43 例全量自测 + **Windows（fork 贵）与 macOS（quadratic 贵）
     双平台各测一轮**——单平台数字不足以决策（本轮就是单平台反例）；
   - 两个方案的完整数据留档于本节，避免第三次重做。
+
+v3.4.8 尝试 #3（2026-10-05，macOS）——**成功**：段 3/10/11 改流式扫描
+=====================================================================
+做法：FMQ 表本就按文件分组且与 HOTLINES 同序 ⇒ 三段各自的"每文件重扫全表"
+改为**单趟读表 + 文件边界结算**（`while IFS=$'\t' read -r p k v`，边界处调用
+s3_f/s10_f/s11_f 结算上一文件）。复杂度 O(文件数 × 表行数) → O(表行数)。
+判据与报错文案逐字不变；`read` 的末尾无换行保护用 `|| [ -n "$p" ]`。
+
+实测（交替 A/B，同机同时刻，3 轮）：
+  旧（v3.4.7 循环查表）：64 / 75 / 68 s（中位 68s）
+  新（流式扫描）      ：32 / 32 / 30 s（中位 32s）
+  ⇒ **约 2.1× 提速**；基线采样（perf-baseline 3）：29 / 29 / 32s，中位 29s，
+     预算余量 10.34×（原 4.62×）。
+验证：全量自测 43/43（42 用例 + 元检查）· DOC 逐字一致 · 零 stderr ·
+      三仓（keel/starter/lytjs）lint 全绿。
+（本节取代 #2 节末尾"仍未做"的结论；#2 记录的两个死路仍有效，勿重做。）
+
+Windows 侧验证（本机无 Windows 通道，需在 Windows/Git Bash 跑，命令如下）：
+  cd <keel 仓> && git pull
+  mkdir -p /tmp/keel-old/checks
+  git -C keel-starter show v3.4.7:keel/checks/keel-lint.sh > /tmp/keel-old/checks/keel-lint.sh
+  cp keel/checks/budget.env /tmp/keel-old/checks/
+  for i in 1 2 3; do
+    s=$(date +%s); bash /tmp/keel-old/checks/keel-lint.sh keel >/dev/null 2>&1; e=$(date +%s); o=$((e-s))
+    s=$(date +%s); bash keel/checks/keel-lint.sh keel >/dev/null 2>&1; e=$(date +%s); n=$((e-s))
+    echo "轮 $i：旧 ${o}s / 新 ${n}s"
+  done
+  bash keel/checks/test-lint.sh        # 全量 43 例
+  预期：旧≈32s（Windows 单次 lint）→ 新应显著低于旧；若新反而更慢，把数字贴回本文件。
