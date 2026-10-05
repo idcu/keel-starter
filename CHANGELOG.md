@@ -4,6 +4,31 @@
 升级按该字段增量合并，**不允许"一键覆盖"**（设计稿 §12.3）。
 本仓是发布仓：改动先在此发布，再更新项目仓里的子模块指针。
 
+## 3.4.7 — 2026-10-05
+
+**一件事：采用日跟进——把首个外部采用方暴露的缺陷修净，并把「与既有钩子框架共存」做成通用能力。**
+
+### 1) 采用日修复（首个外部采用方 lytjs 暴露）
+
+- **macOS BWK awk 兼容 ×2**（P0）：正则字面量 `[^/]` 解析失败 → 段 9 全量误报孤儿；
+  gawk 专有 `ENDFILE` → 末文件字段静默丢失（自测 13/42 假失败）。
+  修法：字符类内 `\/` 转义 + 收尾 flush 改用 `END`。坑：`pitfalls/meta/awk-gawk-gaps.md`
+- **doctor 挂载检查传参修复**：曾把 keel 目录当项目根传给 verify-hooks，
+  挂载检查被整体跳过、假"闭环成立"（同坑 `install-verifies-wrong-dir`）
+- **第 17 项收窄触发**（ADR 0016）：版本副本检查只在写了 keel 徽章的发行仓生效；
+  用户项目自带 CHANGELOG 不再误判；新增用例 42 作护栏
+- **链式挂载支持**（ADR 0017）：`verify-hooks.sh` 认可"框架钩子调用 keel 本体"
+  （husky 的 `_/` 委托形态走父目录探测）；`install-hooks.sh` 冲突提示同步；DESIGN §10.4 增共存段
+- **模板身份泄漏修复**：starter 的 CONSTITUTION/NOW 由 Keel 自身实例文本改为占位骨架
+  （doctor 三项占位检测现在真能检出）；doctor 第 5 项占位正则收窄
+
+### 2) 发布面收口
+
+- 根/内部 `install.sh` 漂移（两份一致判据本应拦下）+ `test-lint.py` 未随 ADR 0016 同步
+  ——两处已同步，`--only 39-42` 复验通过
+- 本版存在的理由：v3.4.6 tag 之后合入的修复必须能被 `--ref` 取到（ADR 0010）
+- 全量自测 43/43（42 用例 + 元检查）· DOC 逐字一致 · 两仓 lint 0 fail
+
 ## 3.4.6 — 2026-10-05
 
 **一件事：把"改判据要等 15 分钟"降到 3 秒；同时查清一件被误诊了两轮的事。**
@@ -74,21 +99,6 @@ bash keel/checks/test-lint.sh                    # 全量 41 例 ≈ 15 分钟
 
 **41 例自测 + NOISE 元检查 + §9.3 逐字一致 = 42/42 PASS** ·
 两仓 lint **0 fail 0 warn** · **stderr 0 行** · 工具链两仓逐字一致
-
-### 3) 采用日修复（首个外部采用方 lytjs 暴露）
-
-- **macOS BWK awk 兼容 ×2**（P0）：正则字面量 `[^/]` 解析失败 → 段 9 全量误报孤儿；
-  gawk 专有 `ENDFILE` → 末文件字段静默丢失（自测 13/42 假失败）。
-  修法：字符类内 `\/` 转义 + 收尾 flush 改用 `END`。坑：`pitfalls/meta/awk-gawk-gaps.md`
-- **doctor 挂载检查传参修复**：曾把 keel 目录当项目根传给 verify-hooks，
-  挂载检查被整体跳过、假"闭环成立"（同坑 `install-verifies-wrong-dir`）
-- **第 17 项收窄触发**（ADR 0016）：用户项目自带 CHANGELOG 不再误判；自测增至 42 例
-- **链式挂载支持**（ADR 0017）：`verify-hooks.sh` 认可"框架钩子调用 keel 本体"
-  （husky 的 `_/` 委托形态走父目录探测）；`install-hooks.sh` 冲突提示同步；DESIGN §10.4 增共存段
-- **模板身份泄漏修复**：starter 的 CONSTITUTION/NOW 由 Keel 自身实例文本改为占位骨架
-  （doctor 三项占位检测现在真能检出）；doctor 第 5 项占位正则收窄
-- **同版本内工具漂移修复**：根/内部 `install.sh` 不一致（CI「两份一致」判据本应拦下）；
-  starter 的 `test-lint.py` 未随 ADR 0016 同步——两处已同步，`--only 39-42` 复验通过
 
 ## 3.4.5 — 2026-10-04
 
