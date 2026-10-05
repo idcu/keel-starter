@@ -99,3 +99,26 @@ Windows 侧验证（本机无 Windows 通道，需在 Windows/Git Bash 跑，命
   done
   bash keel/checks/test-lint.sh        # 全量 43 例
   预期：旧≈32s（Windows 单次 lint）→ 新应显著低于旧；若新反而更慢，把数字贴回本文件。
+
+v3.4.8 双平台验证补充：Windows 侧 A/B（本地 QEMU 虚拟机，2026-10-06）
+=====================================================================
+环境（真 Windows 用户态，非 Wine）：MINGW64_NT-10.0-19044 · bash 5.3.15(cygwin) ·
+GNU Awk 5.4.1 · Python 3.11.9 · git 2.56.0.windows.1
+
+方法：与 macOS 同款交替 A/B（旧=v3.4.7 循环查表脚本，新=流式扫描脚本），
+     同一 VM 会话内交替执行，语料 = keel 仓 44 个热区文档。
+
+结果：
+  轮 1：旧 986s / 新 409s
+  轮 2：旧 555s / 新 333s
+  中位：旧 ≈770s / 新 ≈371s ⇒ **约 2.08× 提速**（macOS 交替 A/B 为 2.1×，方向与量级一致）
+
+诚实注记（供后人引用时保留）：
+  1) 本 VM 仅能以 TCG 软件模拟运行（该 Intel Mac + macOS 15 的 HVF 对 Windows 客户机
+     不稳定，会随机 BSOD「IRQL_NOT_LESS_OR_EQUAL」——已排除网卡/AVX/内存等因素）
+     绝对时间因此放大约 20 倍，**有意义的是新旧比值**；
+  2) 两版本 lint 退出码同为 1（xcopy 到 NTFS 后 MSYS 判定 hooks 不可执行的环境性原因），
+     对两版本完全一致，故不影响对照，但该 rc 不代表仓库真实状态；
+  3) 第 3 轮与 43 例全量自测未在 Windows 侧跑完（VM 会话中途关机）；正确性以
+     macOS 侧 43/43 为准（同一份脚本字节）。
+  4) 复现路径（bare-metal 更佳，10 分钟）：见本节上方「Windows 侧验证」命令块。
