@@ -2,7 +2,7 @@
 
 [![keel-starter CI](https://github.com/idcu/keel-starter/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel-starter/actions/workflows/keel.yml)
 [![keel CI](https://github.com/idcu/keel/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel/actions/workflows/keel.yml)
-[![keel-version](https://img.shields.io/badge/keel--version-3.4.8-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
+[![keel-version](https://img.shields.io/badge/keel--version-3.4.9-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
 
 > 徽章指向 GitHub 镜像（Gitee 无标准徽章端点）。**发布仓**徽章是产品健康度，**项目仓**徽章守的是
 > "设计稿与脚本不许漂移"这条不变量——两者的关系与镜像同步的有序性见设计稿 §12.3。
