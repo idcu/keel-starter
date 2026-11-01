@@ -2,7 +2,7 @@
 
 [![keel-starter CI](https://github.com/idcu/keel-starter/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel-starter/actions/workflows/keel.yml)
 [![keel CI](https://github.com/idcu/keel/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel/actions/workflows/keel.yml)
-[![keel-version](https://img.shields.io/badge/keel--version-3.4.11-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
+[![keel-version](https://img.shields.io/badge/keel--version-3.4.12-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
 
 > 徽章指向 GitHub 镜像（Gitee 无标准徽章端点）。**发布仓**徽章是产品健康度，**项目仓**徽章守的是
 > "设计稿与脚本不许漂移"这条不变量——两者的关系与镜像同步的有序性见设计稿 §12.3。
@@ -48,7 +48,7 @@ bash keel/checks/keel-doctor.sh
 判据自检怎么跑、还有哪些需要你亲手填。**不修复、不改文件**——诊断与修复分开。
 
 已clone 下来了就直接 `bash install.sh <项目根>`；
-**要固定版本**加 `--ref`（`--ref v3.4.6` 或 `--ref=v3.4.6` 都行）——
+**要固定版本**加 `--ref`（`--ref v3.4.12` 或 `--ref=v3.4.12` 都行）——
 指定了版本拉不到就会**报错并列出可用版本**，不会偷偷给你装 `main`。
 项目里已有 `keel/` 时它走**就地升级**——只补工具链与缺失目录，不覆盖你的
 `INDEX.md` / `NOW.md` / `pitfalls/` / `decisions/`（设计稿 §12.3：升级按字段增量合并）。
@@ -74,7 +74,7 @@ cp .github/workflows/keel.yml /path/to/your-project/.github/workflows/
 # 4. 内核校验：必须 0 fail
 bash keel/checks/keel-lint.sh keel
 
-# 5. 自测：必须 42/42
+# 5. 自测：必须 43/43
 bash keel/checks/test-lint.sh
 ```
 
@@ -109,7 +109,7 @@ bash keel/checks/test-lint.sh
 ```bash
 # 日常三个
 bash keel/checks/keel-lint.sh keel        # 一致性校验：0 fail 才放行（pre-commit 与 CI 都跑它）
-bash keel/checks/test-lint.sh             # lint 自测：41 用例 + 元检查 + 脚本与文档一致性
+bash keel/checks/test-lint.sh             # lint 自测：42 用例 + 元检查 + 脚本与文档一致性
 bash keel/checks/test-lint.sh --only 6,39-41   # 只跑指定用例（改判据时用，秒级；发版前仍须全量）
 bash keel/checks/install-hooks.sh         # 装钩子（每人 clone 后跑一次，装完自动复核）
 
@@ -153,7 +153,7 @@ bash keel/checks/keel-lite.sh keel --apply   # 确认后执行；裁完自动跑
 
 | ① 锚点 | ② pre-commit | ③ commit-msg | ④ CI |
 |---|---|---|---|
-| 每次任务开始先读 INDEX + NOW | `keel/` 下 md 变更即跑 lint，0 fail 才放行 | message 里写 `pitfall: <文件名>` 自动给 `triggers` +1 | lint 0 fail + 自测 42/42 |
+| 每次任务开始先读 INDEX + NOW | `keel/` 下 md 变更即跑 lint，0 fail 才放行 | message 里写 `pitfall: <文件名>` 自动给 `triggers` +1 | lint 0 fail + 自测 43/43 |
 
 **缺一处，闭环就退化成自觉。** 所以②③也在检查面内：lint 第 16 项管"钩子本体在不在且可执行"（防误删），
 `verify-hooks.sh` 管"本地到底装没装"（`core.hooksPath`）——两者都失效才是真正没人知道的静默故障。
