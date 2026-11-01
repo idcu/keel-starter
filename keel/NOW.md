@@ -2,7 +2,7 @@
 scope: now
 status: active
 last-verified: 2026-10-05
-updated: 2026-10-05
+updated: 2026-10-15
 keywords: [焦点, 交接]
 ---
 
@@ -25,3 +25,30 @@ keywords: [焦点, 交接]
 | 卡在 | 解锁条件 | 绕行 |
 |---|---|---|
 | 无 | —— | —— |
+
+## 度量回顾 2026-10-15
+
+> 窗口 2026-10-01 → 2026-10-15（近两周）；采集口径见《Keel 设计稿》§11。
+
+**三个指标**
+
+| 指标 | 数值 | 对照健康信号 |
+|---|---|---|
+| 返工率 | keel 仓 0/60（0%）· keel-starter 仓 1/43（≈2.3%） | 「持续下降」——无历史点，本点仅作基线 |
+| 坑复发率 | 12 条目合计 `triggers=3`；最大单坑 3：`pitfalls/meta/link-syntax-example-becomes-real-link.md`（`status: distilled`） | 「单坑 ≤1」被触及，但 §7.4 蒸馏已走完，无需重复 |
+| 平均阻塞时长 | **暂无样本** | 「缩短」无从计算：`NOW-history/` 唯一归档为占位模板，无真实「登记 → 解锁」日期 |
+
+口径注：返工率按 §11 表用宽匹配 `-i --grep=revert`（keel-starter 命中 1 条 `0e13fd5`）。§11.2 已指明该口径会把含 "revert" 字样的普通提交误计，故 2.3% 应读作上限。
+
+**lint warn 清单**（`bash keel-starter/keel/checks/keel-lint.sh keel-starter/keel` → 0 fail）
+
+- ⚠️ `NOW 已 10d 未更新: NOW.md` —— 本轮写回 `updated` 后应消除
+
+**下一轮补哪一层 / 哪个 skill**
+
+1. 补「NOW 归档」层（§5.5）：本仓阻塞表无真实登记日期，平均阻塞时长恒为「暂无样本」。§11 结语：指标不可采集不是没数据，而是上游动作没人做——下轮把阻塞按日期记全，并先归档再重写。
+2. 补「遵守率」skill（§11.1 / §11.2）：`.metrics/violations.jsonl` 窗口内仅 14 条记录（窗口 43 提交），
+   其中仅 6 条 `checked=1` → 覆盖率 ≈ 43% 而上报 0 命中 0 警告，
+   正是 §11.2 点名的「覆盖率低 + 遵守率高」虚高形态；
+   下轮接入 `compliance.sh report`，把覆盖率与遵守率并读。
+3. `skills/INDEX.md` 仍是空表：把「双周度量回顾」登记为首个 skill，否则按 §11 结语「靠'我记得'维持的例会在第三周消失」。
