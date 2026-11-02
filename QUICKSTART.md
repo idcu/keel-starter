@@ -43,6 +43,16 @@ bash keel/checks/test-lint.sh          # 必须 43/43（42 用例 + 1 元检查�
 
 ## 4. 升级与回滚
 
+**先确认你手上有没有升级引擎**：`ls keel/checks/keel-upgrade.sh`。
+没有（≤3.5.0 的仓库就是这样）就重跑一次 `install.sh`——它会把新引擎拉起来并**直接升级**，
+不需要先手工拷脚本：
+
+```bash
+bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --ref v3.7.0
+```
+
+有了引擎之后，日常升级与回滚：
+
 ```bash
 bash keel/checks/keel-upgrade.sh --target . --dry-run   # 先看计划（不动文件）
 bash keel/checks/keel-upgrade.sh --target . --to v3.7.0 # 升级：前后各跑一次门禁
@@ -54,7 +64,6 @@ bash keel/checks/keel-upgrade.sh --target . --rollback  # 回到最近一次升�
   新增结构文件只在父目录已存在时补齐。
 - 升级后门禁任一失败会**自动整目录回滚**（备份在 `.keel-backup/`，保留最近 3 份）。
 - 已是目标版本会明说「无需升级」，重复执行不产生改动。
-- **≤3.5.0 的老仓库**：还没有升级引擎，重跑一次新版 `install.sh` 就是引导路径。
 
 ## 5. 常见失败怎么查
 
@@ -64,6 +73,7 @@ bash keel/checks/keel-upgrade.sh --target . --rollback  # 回到最近一次升�
 | `❌ 闭环钩子` | `bash keel/checks/verify-hooks.sh .` | `bash keel/checks/install-hooks.sh`（`core.hooksPath` 是本地设置，不进版本库） |
 | `❌ 超预算` | `bash keel/checks/load-estimate.sh <关键词>` | 先换更准的关键词；确实词准仍超 → 按拆/提/沉处理 |
 | `⚠️ 陈旧` | 文件 frontmatter 的 `last-verified` | 复核后改日期；ADR/坑库有豁免，别为消警告而刷日期 |
+| `bash: keel/checks/keel-upgrade.sh: No such file` | `ls keel/checks/keel-upgrade.sh` | 你停在 ≤3.5.0，还没有升级引擎；重跑 `install.sh --ref v3.7.0`（见 §4 开头） |
 | 自测失败 | `bash keel/checks/test-lint.sh --only <编号>` | 先定位是哪条判据，再改 lint 与 §9.3 文档（同一个动作） |
 | 中文/编码异常 | `locale`、`bash --version` | bash 3.2 下变量后紧跟中文必须写 `${var}`（见 CONSTITUTION rule 7） |
 
