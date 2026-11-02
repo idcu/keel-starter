@@ -1,4 +1,4 @@
-# keel-manifest v1 version=3.7.3 generated=2026-11-03
+# keel-manifest v1 version=3.7.4 generated=2026-11-03
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455
@@ -11,7 +11,7 @@ kernel	checks/load-estimate.sh	755	c73b2c5fec37ac3c92e77b6016b644828f986609929f3
 kernel	checks/keel-lite.sh	755	e41f5e113c2dedf5f6da1e2324de8d8e24af898b22601768d9a3aeb5e86d80ae
 kernel	checks/verify-hooks.sh	755	08d5179a9f0d0030c123fd55c6b6e137642070f5dd3a2c52fdb015dec8338ab3
 kernel	checks/install-hooks.sh	755	6abd035a643bf11cb9d86233173890c3c3dcea9c81415f053ab33088084675d2
-kernel	checks/install.sh	755	621e571058ee64d92b8abced8c432d8239897a9d7870065ac0fd07ea10944f39
+kernel	checks/install.sh	755	68a0c556401887fe407e717ce02b89e7cec2c081a9af11fd59ee877519720d72
 kernel	checks/check-mcp-config.sh	755	d669d2f04a09ba3e4ffc7f993c70e22861639868df14edfa05e8a80ff7290360
 kernel	checks/keel-doctor.sh	644	48f646a3ce330e0d9eb89494ec48344900c3a2fd98bc25e2b5c7cb75f6b27b17
 kernel	checks/perf-baseline.sh	644	bc39f01a71f493337c676889894fe637797e720adfee72da7abc83820a2b72fb
