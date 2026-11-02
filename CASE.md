@@ -132,5 +132,8 @@ npm run test:coverage      # = vitest run --coverage
 - **单样本**：目前只有 lytjs 一个真实采用方，结论不能外推到所有项目；
 - **业务侧数字带版本**：8436 用例 / 87.66% 是 3.5.0 记录，384 文件 / 8432 用例 /
   87.65% 是 3.7.0 本次实测；两者用例集合不同，不能逐项直接对比；
-- **未覆盖**：多采用方、Windows/GNU 环境的长跑（本机为 macOS / bash 3.2.57）；
+- **已覆盖 GNU/Linux**：Debian 12（glibc 2.36 / coreutils 9.1）、Debian 13（glibc 2.41 /
+  coreutils 9.7）、Alpine 3.20（musl / busybox 1.36），三条基线 2026-11-03 全量实测：
+  lint 0 fail、lint 自测双 locale 44/44、升级自测 19/19（含断点续跑与回滚）；
+- **未覆盖**：Windows/Git Bash、多采用方；本机 macOS / bash 3.2.57 作为对照基线；
 - 想自己复现：从 [TRY-KEEL.md](TRY-KEEL.md) 开始，三分钟看到你自己项目的真实数字。

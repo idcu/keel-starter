@@ -532,6 +532,31 @@ def check_locale_isolation(base):
     return True, "UTF-8/C 双 locale 下段 4 无误报；无 LC_ALL 泄漏赋值"
 
 
+def check_invoke_forms(base):
+    """lint 的判据不得依赖调用形式（v3.7.3，坑 worktree-eol-differs-from-main）。
+
+    历史缺陷：段 9 的路径规范化丢掉前导 `/` 与 `.`，只有 `lint.sh keel` 这一种
+    相对入参 0 fail；`$(pwd)/keel` 与文档里写着的 `cd keel && bash checks/keel-lint.sh`
+    会把全部热区文档误报成孤儿。这里用同一条已知干净基线跑三种入参形式。
+    """
+    bash = shutil.which("bash") or "bash"
+    forms = [
+        ("相对", [bash, LINT, "keel"], base),
+        ("绝对", [bash, LINT, os.path.join(base, "keel")], base),
+        ("点号", [bash, LINT, "."], os.path.join(base, "keel")),
+    ]
+    bad = []
+    for name, cmd, cwd in forms:
+        p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out = p.stdout.decode("utf-8", "replace")
+        fails = [l for l in out.splitlines() if l.startswith("❌")]
+        if p.returncode != 0 or fails:
+            bad.append("%s: rc=%d %s" % (name, p.returncode, (fails or ["无 ❌"])[0][:70]))
+    if bad:
+        return False, "调用形式改变判据 → %s" % bad[0]
+    return True, "相对 / 绝对 / '.' 三种入参形式均 0 fail"
+
+
 def check_prose_numbers():
     """门面散文里的版本号与自测数字必须与真源一致（ADR 0018）。
 
@@ -540,7 +565,7 @@ def check_prose_numbers():
     没有任何判据——2026-11-02 评估实测漂了 12 处（39/39、41 例、42/42、v3.4.6），
     正是 Lint Leakage 在自家文档上的复现。手改只能补这一版，判据才能拦住下一版。
 
-    真源：用例数 = len(CASES)（总分母 +1 元检查）；版本 = keel/INDEX.md 的 keel-version。
+    真源：用例数 = len(CASES)（总分母 +2 元检查：NOISE / INVOKE）；版本 = keel/INDEX.md 的 keel-version。
     目标：仓根 README.md + DESIGN.md（存在才查）——只守门面，docs/、pitfalls/
     等历史叙述密集区不在覆盖内。
     豁免：行内带 vX.Y.Z（≠当前版本）的比分/用例断言视为历史叙述，不判——
@@ -553,7 +578,7 @@ def check_prose_numbers():
                       open(idx, encoding="utf-8").read())
         ver = m.group(1) if m else None
     cases_n = len(CASES)      # 全集，不受 --only 子集影响
-    total = cases_n + 1       # +1 = NOISE 元检查
+    total = cases_n + 2       # +2 = NOISE / INVOKE 元检查
     targets = []
     rd = os.path.join(os.path.dirname(os.path.dirname(HERE)), "README.md")
     if os.path.isfile(rd):
@@ -606,7 +631,7 @@ def check_prose_numbers():
                                % (os.path.basename(path), ln, m.group(1), cases_n))
     if bad:
         return False, "%d 处漂移，例：%s" % (len(bad), bad[0])
-    return True, "README/DESIGN 散文数字与真源一致（版本 %s · %d 用例 + 1 元检查）" \
+    return True, "README/DESIGN 散文数字与真源一致（版本 %s · %d 用例 + 2 元检查）" \
                  % (ver, cases_n)
 
 
@@ -771,6 +796,13 @@ def main():
     print("[%s] LOCALE 段 3/4 locale 隔离          %s" % ("PASS" if loc_ok else "FAIL", loc_msg))
     if not loc_ok:
         bad += 1
+    # INVOKE（坑 worktree-eol-differs-from-main）：判据不得依赖 lint 的入参形式
+    inv_ok, inv_msg = check_invoke_forms(base)
+    print("[%s] INVOKE 入参形式无关          %s" % ("PASS" if inv_ok else "FAIL", inv_msg))
+    if not inv_ok:
+        bad += 1
+    else:
+        ok += 1
     # PROSE（ADR 0018）：门面散文数字与真源一致——与 DOC 同族，不进用例分母
     prose_ok, prose_msg = check_prose_numbers()
     if prose_ok is None:
@@ -783,9 +815,9 @@ def main():
     print("=" * 76)
     # 分母要说清：cases 是故障注入用例，NOISE 是元检查（ADR 0014）——
     # 两者都算"检查"，但不同类，混在一个分母里会让人误读成"多了 1 个用例"。
-    total = len(cases) + 1   # +1 = NOISE 元检查
+    total = len(cases) + 2   # +2 = NOISE / INVOKE 元检查
     if bad == 0:
-        print("✅ 自测通过：%d/%d（%d 用例 + 1 元检查）" % (ok, total, len(cases)))
+        print("✅ 自测通过：%d/%d（%d 用例 + 2 元检查）" % (ok, total, len(cases)))
     else:
         print("❌ 自测失败：%d 项未通过（共 %d 项）" % (bad, total))
     if keep:

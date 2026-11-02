@@ -9,7 +9,7 @@
 # 在项目根目录执行（默认不写锚点，只提示）
 bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --with-anchor
 
-# 要固定版本（推荐）：--ref v3.7.0
+# 要固定版本（推荐）：--ref v3.7.3
 # 已 clone 了模板：bash install.sh <项目根> --with-anchor
 ```
 
@@ -22,7 +22,7 @@ bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --w
 ```bash
 bash keel/checks/keel-doctor.sh        # 体检：闭环 / lint / 预算 / 还差你做什么（只读）
 bash keel/checks/keel-lint.sh keel     # 必须 0 fail
-bash keel/checks/test-lint.sh          # 必须 43/43（42 用例 + 1 元检查）
+bash keel/checks/test-lint.sh          # 必须 44/44（42 用例 + 2 元检查）
 ```
 
 第二条验的是**你的仓库合规**；第三条验的是**你手上的 lint 本身是否可信**
@@ -48,14 +48,14 @@ bash keel/checks/test-lint.sh          # 必须 43/43（42 用例 + 1 元检查�
 不需要先手工拷脚本：
 
 ```bash
-bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --ref v3.7.0
+bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --ref v3.7.3
 ```
 
 有了引擎之后，日常升级与回滚：
 
 ```bash
 bash keel/checks/keel-upgrade.sh --target . --dry-run   # 先看计划（不动文件）
-bash keel/checks/keel-upgrade.sh --target . --to v3.7.2 # 升级：前后各跑一次门禁
+bash keel/checks/keel-upgrade.sh --target . --to v3.7.3 # 升级：前后各跑一次门禁
 bash keel/checks/keel-upgrade.sh --target . --rollback  # 回到最近一次升级前
 ```
 
@@ -75,14 +75,14 @@ bash keel/checks/keel-upgrade.sh --target . --rollback  # 回到最近一次升�
 | `❌ 闭环钩子` | `bash keel/checks/verify-hooks.sh .` | `bash keel/checks/install-hooks.sh`（`core.hooksPath` 是本地设置，不进版本库） |
 | `❌ 超预算` | `bash keel/checks/load-estimate.sh <关键词>` | 先换更准的关键词；确实词准仍超 → 按拆/提/沉处理 |
 | `⚠️ 陈旧` | 文件 frontmatter 的 `last-verified` | 复核后改日期；ADR/坑库有豁免，别为消警告而刷日期 |
-| `bash: keel/checks/keel-upgrade.sh: No such file` | `ls keel/checks/keel-upgrade.sh` | 你停在 ≤3.5.0，还没有升级引擎；重跑 `install.sh --ref v3.7.2`（见 §4 开头） |
+| `bash: keel/checks/keel-upgrade.sh: No such file` | `ls keel/checks/keel-upgrade.sh` | 你停在 ≤3.5.0，还没有升级引擎；重跑 `install.sh --ref v3.7.3`（见 §4 开头） |
 | 自测失败 | `bash keel/checks/test-lint.sh --only <编号>` | 先定位是哪条判据，再改 lint 与 §9.3 文档（同一个动作） |
 | 中文/编码异常 | `locale`、`bash --version` | bash 3.2 下变量后紧跟中文必须写 `${var}`（见 CONSTITUTION rule 7） |
 
 ## 6. 装好后的验收
 
 - [ ] `keel-lint.sh keel` 0 fail
-- [ ] `test-lint.sh` 43/43
+- [ ] `test-lint.sh` 44/44
 - [ ] `keel-doctor.sh` 第 5 节“还差你亲手”的三项已清零
 - [ ] 改一个 `keel/*.md` 后 `git commit` 会被 pre-commit 拦住（证明钩子真的挂上了）
 

@@ -85,12 +85,15 @@ def version_of(keel_dir):
     return ""
 
 
-def run_upgrade(args, cwd, env=None):
+def run_upgrade(args, cwd, env=None, umask=None):
     e = dict(os.environ)
     if env:
         e.update(env)
+    kw = {}
+    if umask is not None and os.name == "posix":
+        kw["preexec_fn"] = lambda: os.umask(umask)
     p = subprocess.run([BASH, UPGRADE] + args, cwd=cwd, env=e,
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kw)
     return p.returncode, p.stdout.decode("utf-8", "replace")
 
 
@@ -457,6 +460,34 @@ def t_fault_guard(root):
     assert_true(version_of(os.path.join(tgt, "keel")) == version_of(os.path.join(tpl, "keel")),
                 "正常升级未完成")
     assert_true(not os.path.exists(pending_path(tgt)), "成功路径残留 pending")
+
+
+@case("严格 umask（077）：备份 / 升级 / 回滚仍保留 644 与 755")
+def t_umask(root):
+    """cp -R 的权限位会被 umask 过滤（实测两端一致：755 → 700）。
+
+    升级的"回滚必须恢复到升级前字节（含权限）"这条承诺，只有在备份与还原都用
+    cp -pR 时才无条件成立；否则采用方设了 umask 077 就会悄悄丢组/其他位。
+    本用例把整条链路（备份 → 覆盖 → 回滚）都在 umask 077 下跑一遍。
+    """
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    rc, out = run_upgrade(["--target", tgt, "--from", tpl, "--skip-test-lint"], root,
+                          umask=0o077)
+    assert_true(rc == 0, "umask 077 下升级应成功，实际 %d\n%s" % (rc, out[-600:]))
+    lintf = os.path.join(tgt, "keel/checks/keel-lint.sh")
+    hook = os.path.join(tgt, "keel/checks/hooks/pre-commit")
+    for f in (lintf, hook):
+        assert_true(os.path.isfile(f), "缺文件: " + f)
+        assert_true(os.stat(f).st_mode & 0o777 == 0o755,
+                    "umask 077 下升级后 %s 权限=%o（应为 755）"
+                    % (os.path.basename(f), os.stat(f).st_mode & 0o777))
+    rc, out = run_upgrade(["--rollback"], tgt, umask=0o077)
+    assert_true(rc == 0, "umask 077 下回滚失败\n%s" % out[-600:])
+    assert_true(version_of(os.path.join(tgt, "keel")) == "3.4.11", "回滚后版本不对")
+    assert_true(os.stat(lintf).st_mode & 0o777 == 0o755,
+                "回滚后 keel-lint.sh 权限=%o（应为 755，备份/还原须用 cp -pR）"
+                % (os.stat(lintf).st_mode & 0o777))
 
 
 def main():

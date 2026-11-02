@@ -96,7 +96,7 @@ if [ "$EXISTING" -eq 1 ]; then
   fi
   bash "$UP" --target "$TARGET" --from "$tmp/starter" || exit $?
 else
-  cp -R "$tmp/starter/keel" "$TARGET/keel" && echo "   + 已复制 keel/（含 checks / hooks / 模板）"
+  cp -pR "$tmp/starter/keel" "$TARGET/keel" && echo "   + 已复制 keel/（含 checks / hooks / 模板）"
 fi
 
 # 记一条基线：装模板本身不是"一次工作"，不该进遵守率的分母。

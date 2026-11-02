@@ -4,11 +4,17 @@
 #        bash checks/keel-lint.sh                     # 在 keel/ 内调用（默认 .）
 # 退出码: 0 = 通过（含 warn）；1 = 存在 fail；2 = keel 目录不存在
 # 口径:  热区 = 全部 md 减去 archive/ 与 NOW-history/；冷区只做死链检查。
-# 依赖:  bash 3.2+ / awk / sed / find / tsort（可选）/ git（仅 frozen 检查用）
+# 依赖:  bash 3.2+ / awk / sed / find / git（仅 frozen 检查用）
 set -uo pipefail
 
 KEEL_DIR="${1:-.}"; KEEL_DIR="${KEEL_DIR%/}"
 [ -d "$KEEL_DIR" ] || { echo "❌ 目录不存在: $KEEL_DIR"; exit 2; }
+# v3.7.3：入参先归一化成**绝对物理路径**。段 9 把链接规范化后与 find 输出逐字比对，
+# 而 norm() 会丢掉前导 `/` 与开头的 `.`（"/k/x"→"k/x"、"./x"→"x"），于是
+# `lint.sh "$(pwd)/keel"` 或 `cd keel && lint.sh`（文档里写着的默认 `.`）会把
+# 全部热区文档误报成孤儿——只有 `lint.sh keel` 这一种形式"碰巧"成立。
+# 归一化后三种调用形式的判据一致（test-lint 的 INVOKE 元检查守这条）。
+KEEL_DIR=$(cd "$KEEL_DIR" && pwd -P) || { echo "❌ 目录不可进入: $KEEL_DIR"; exit 2; }
 
 # ---------- 硬预算默认值（兜底；真源是 checks/budget.env） ----------
 MAX_INDEX=100;        BYTES_INDEX=4500
@@ -551,15 +557,26 @@ if [ -s "$LINKS" ]; then
 fi
 sort -u "$edges" -o "$edges"
 if [ -s "$edges" ]; then
-  if command -v tsort >/dev/null 2>&1; then
-    tsort "$edges" >/dev/null 2>"$tmp/tsort.err"; tsort_rc=$?
-    # 注意：BSD/macOS 的 tsort 遇环仍返回 0，只把 "cycle in data" 写到 stderr；
-    # GNU tsort 返回 1。所以"退出码非 0"和"stderr 非空"两个条件要一起看。
-    if [ "$tsort_rc" -ne 0 ] || [ -s "$tmp/tsort.err" ]; then
-      fail_msg "引用存在环（§3.1 禁止循环引用）: $(head -1 "$tmp/tsort.err")"
-    fi
-  else
-    warn_msg "环境无 tsort，跳过循环引用检查"
+  # 环检测不依赖 tsort（v3.7.3）：busybox / 精简镜像没有它，而"环境缺工具就跳过"
+  # 等于判据静默失效（实测 Alpine/busybox 上 test-lint 的「引用成环」用例失去判据）。
+  # 改用 awk 套 Kahn 拓扑排序：能消解全部节点 = 无环，有剩余 = 有环。
+  # 方向（引用者→被引用者）不影响"有无环"的判定，也省掉 BSD/GNU tsort 的退出码差异。
+  cyc=$(awk '
+    { adj[$1] = adj[$1] " " $2; ind[$2]++; nodes[$1] = 1; nodes[$2] = 1 }
+    END {
+      n = 0
+      for (k in nodes) { n++; d[k] = ind[k] + 0; if (d[k] == 0) q[++tail] = k }
+      head = 1; seen = 0
+      while (head <= tail) {
+        v = q[head++]; seen++
+        m = split(adj[v], a, " ")
+        for (i = 1; i <= m; i++) if (--d[a[i]] == 0) q[++tail] = a[i]
+      }
+      if (seen < n) { print n - seen " 个节点未能消解"; exit 1 }
+    }
+  ' "$edges" 2>/dev/null)
+  if [ $? -ne 0 ]; then
+    fail_msg "引用存在环（§3.1 禁止循环引用）: ${cyc:-拓扑排序后仍有节点未消解}"
   fi
 fi
 
@@ -626,12 +643,13 @@ echo "── 9. 孤儿（热区文档未被任何热区文档以链接引用；I
 # 拼两次会得到 keel/keel/xxx，于是每个文件都"未被引用"、全量误报孤儿（实测踩过）。
 awk -F'\t' '
   function norm(p,   parts, np, i, out, seg) {
-    np = split(p, parts, "/"); out = ""
+    np = split(p, parts, "/")
+    out = (substr(p, 1, 1) == "/" ? "/" : "")   # 绝对路径必须保住前导 /
     for (i = 1; i <= np; i++) {
       seg = parts[i]
       if (seg == "" || seg == ".") continue
       if (seg == "..") { sub(/\/[^\/]*$/, "", out); continue }
-      out = (out == "" ? seg : out "/" seg)
+      out = (out == "" || out == "/" ? out seg : out "/" seg)
     }
     return out
   }

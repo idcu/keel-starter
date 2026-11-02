@@ -2,7 +2,7 @@
 scope: meta
 status: active
 severity: P1
-last-verified: 2026-10-03
+last-verified: 2026-11-03
 triggers: 0
 keywords: [worktree, 行尾, CRLF, 假fail, 孤儿, 死链, 子模块, 回填]
 ---
@@ -16,7 +16,7 @@ keywords: [worktree, 行尾, CRLF, 假fail, 孤儿, 死链, 子模块, 回填]
 
 1. `core.autocrlf=true` 时 worktree 检出成 **CRLF**，主工作树是 **LF**（任意一个都会单独触发）：
    字节虚高（实测 1181 → 1211）+ 链接目标带 `\r` → **全判孤儿**。
-2. lint 的目录入参按 cwd 解析，**传绝对路径同样全判孤儿**（实测 27 条）。
+2. ~~lint 目录入参按 cwd 解析，传绝对路径全判孤儿（实测 27 条）~~**v3.7.3 已修**：入参先归一化为绝对路径。
 3. **子模块不会被 worktree 检出**，指向子模块内文件的链接**全报死链**。
 
 ## 正解

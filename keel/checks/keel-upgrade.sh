@@ -237,7 +237,7 @@ if [ "$RB_SET" -eq 1 ]; then
     B=$(ls -1dt "$TARGET"/.keel-backup/*/ 2>/dev/null | head -1 | sed 's#/$##')
   fi
   if [ -n "$B" ] && [ -d "$B/keel" ]; then
-    rm -rf "$TARGET/keel" && cp -R "$B/keel" "$TARGET/keel" \
+    rm -rf "$TARGET/keel" && cp -pR "$B/keel" "$TARGET/keel" \
       || die 2 "回滚复制失败（原目录可能被占用）"
     echo "✅ 已回滚到备份: $B"
   elif [ -f "$P" ] && [ "$(pending_stage "$P")" = "preflight" ]; then
@@ -458,7 +458,7 @@ if [ "$DRY" -eq 0 ]; then
     mkdir -p "$TARGET/.keel-backup"
     BK_DIR="$TARGET/.keel-backup/$(printf '%s' "$CUR" | tr '/ ' '__')-to-$(printf '%s' "$TOV" | tr '/ ' '__')-$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$BK_DIR"
-    cp -R "$TARGET/keel" "$BK_DIR/keel" || die 2 "备份失败: $BK_DIR"
+    cp -pR "$TARGET/keel" "$BK_DIR/keel" || die 2 "备份失败: $BK_DIR"
     mkdir -p "$BK_DIR/local-mod"
     pending_write backup
     echo "── 2. 备份：${BK_DIR}（可用 --rollback 回滚）"
@@ -568,7 +568,7 @@ if [ "${PRE_BAD:-0}" -eq 0 ] && { [ "$_lint_rc" -ne 0 ] || [ "$_tl_rc" -ne 0 ]; 
     exit 4
   fi
   echo "❌ 升级后门禁失败 → 自动回滚到 v$CUR"
-  rm -rf "$TARGET/keel" && cp -R "$BK_DIR/keel" "$TARGET/keel" \
+  rm -rf "$TARGET/keel" && cp -pR "$BK_DIR/keel" "$TARGET/keel" \
     || die 2 "自动回滚失败！备份仍在: $BK_DIR/keel（手工执行 --rollback）"
   rm -f "$PENDING"
   echo "   已回滚。详情: $TGT_LOG"
@@ -587,7 +587,7 @@ cat > "$BK_DIR/restore.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 rm -rf "$TARGET/keel"
-cp -R "$BK_DIR/keel" "$TARGET/keel"
+cp -pR "$BK_DIR/keel" "$TARGET/keel"
 echo "已回滚到 v${CUR}（备份: ${BK_DIR}）"
 EOF
 chmod +x "$BK_DIR/restore.sh"

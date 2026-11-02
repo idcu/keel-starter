@@ -1,17 +1,17 @@
-# keel-manifest v1 version=3.7.2 generated=2026-11-03
+# keel-manifest v1 version=3.7.3 generated=2026-11-03
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455
-kernel	checks/keel-lint.sh	755	3e2d39106dfe4f999fa8e0404859ea52f9ff0657697499e1db64e2893b3ece27
+kernel	checks/keel-lint.sh	755	19ef3ebc016909326f73bb33461a9c529667bb1b7abc472c109a34d6f995dcf1
 kernel	checks/test-lint.sh	755	93f5861d880a7dc4ba225527e708e0c26f869e832e1eaa8cb36e933b14a7f4d3
-kernel	checks/test-lint.py	644	7806cc03f5a3692ba34f7acf44b8ff4e80bf418299073b72fba46bffc658e598
-kernel	checks/keel-upgrade.sh	755	dde2e504da4d07cdeb38c9578264409de30b04f2deacae2de9e3fb8c3b69513b
-kernel	checks/compliance.sh	755	f6bb1d47f3cf81b41f5e0e5b400f52bdf5e55e86c3ad1551888e2147d5fbe270
+kernel	checks/test-lint.py	644	e601694026da6727f23a3421e6e3cf0864eee1a4f840d9dee6488f70ee7e2af4
+kernel	checks/keel-upgrade.sh	755	abe0d295ed49292e06c82510fa243f7a96aba62a79548235b7873425bb47d950
+kernel	checks/compliance.sh	755	59c40b3729a6abfe93ab16bf180c961a943ae3f3337075100eac7e09bfd05d09
 kernel	checks/load-estimate.sh	755	c73b2c5fec37ac3c92e77b6016b644828f986609929f3c6368d530f43d3a0e48
 kernel	checks/keel-lite.sh	755	e41f5e113c2dedf5f6da1e2324de8d8e24af898b22601768d9a3aeb5e86d80ae
 kernel	checks/verify-hooks.sh	755	08d5179a9f0d0030c123fd55c6b6e137642070f5dd3a2c52fdb015dec8338ab3
 kernel	checks/install-hooks.sh	755	6abd035a643bf11cb9d86233173890c3c3dcea9c81415f053ab33088084675d2
-kernel	checks/install.sh	755	050bdfab08fee15d0d1ed085271905d7e53a7c2a384b984c21f611dd6e6bf2b7
+kernel	checks/install.sh	755	621e571058ee64d92b8abced8c432d8239897a9d7870065ac0fd07ea10944f39
 kernel	checks/check-mcp-config.sh	755	d669d2f04a09ba3e4ffc7f993c70e22861639868df14edfa05e8a80ff7290360
 kernel	checks/keel-doctor.sh	644	48f646a3ce330e0d9eb89494ec48344900c3a2fd98bc25e2b5c7cb75f6b27b17
 kernel	checks/perf-baseline.sh	644	bc39f01a71f493337c676889894fe637797e720adfee72da7abc83820a2b72fb
@@ -19,7 +19,7 @@ kernel	checks/perf-findings.txt	644	737203604e732c5a8fdd8e7a37ffbb4f68d2d7247d74
 kernel	checks/mcp/keel-mcp-server.py	755	f09e0288d0824a91f911565e0dbaf21d71454b5618527f97e252daa6b5909b5a
 kernel	checks/retrieval/keel-search.py	755	f83298592609e6ee9c6a6dee1a529bd3815ff7ade9c532d08feb7bb3e1e7b821
 kernel	checks/test-upgrade.sh	755	7212b8881d058e0d36981e51dc2622d06f42bc2d64e2bc184411e85e185cfc70
-kernel	checks/test-upgrade.py	644	b516ca7920721abfc5ed07a68f9f64bf44cbd50918aae3b6d84110b541b0aaeb
+kernel	checks/test-upgrade.py	644	a6e6f2c93961eb20fd17afa1547888aae3060d184373514dfc07df6458999864
 kernel	checks/hooks/pre-commit	755	9920408d87c4f72d9d4b89a5b8ddd9102b63eb9318fa1c6dc05677fff908c56b
 kernel	checks/hooks/commit-msg	755	f87ae2a27c611999aa7ec294f13c2cf5049238967e465d9118bc40a667256a6b
 merge	INDEX.md	644	

@@ -315,13 +315,12 @@ backfill() {
       for sm in $sm_paths; do
         [ -d "$proj/$sm" ] || continue
         mkdir -p "$wt/$(dirname "$sm")" 2>/dev/null
-        cp -R "$proj/$sm" "$wt/$(dirname "$sm")/" 2>/dev/null || true
+        cp -pR "$proj/$sm" "$wt/$(dirname "$sm")/" 2>/dev/null || true
       done
     fi
 
-    # 入参必须传**相对**的 `keel` 并在 $wt 里跑：lint 的目录入参是按 cwd 解析的，
-    # 传绝对路径会让所有文档被判成孤儿（实测 27 条假 fail → 传相对路径是 0）。
-    # 与坑库 `install-verifies-wrong-dir.md` 同一类：路径入参 + cwd 必须同时对。
+    # 传相对 `keel` 沿用旧写法（v3.7.3 起相对/绝对/`.` 三种入参判据等价，
+    # 由 test-lint 的 INVOKE 元检查守）；这里不换只是为了少动一处输出。
     out=$(cd "$wt" && bash "$KEEL_DIR/checks/keel-lint.sh" keel 2>&1); rc=$?
     f=$(printf '%s\n' "$out" | grep -c '^❌')
     # 结尾那行「❌ keel-lint 失败（见上方 ❌ 项）」是汇总，不算一条命中
