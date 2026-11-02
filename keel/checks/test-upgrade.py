@@ -14,6 +14,9 @@
       ⑤ 幂等：重复执行 / 已是目标版本 → 明确「无需升级」，不产生额外改动
     另加三条防腐烂断言：manifest 与实际文件一致（含权限位）、改 kernel 不改清单必须判死、
     dry-run 零改动。
+    断点恢复（v3.7.1）另有 6 例：backup 后中断续跑、第 N 个文件中断续跑且与全新升级逐字节一致、
+    中断后回滚恢复字节与权限、已完成文件被外部改动拒绝续跑、跨版本续跑拒绝、成功无残留；
+    并用 1 例验证故障注入的双开关防护（只设 FAULT 不设 TEST_HOOKS 时正常路径不受影响）。
 
 为什么需要它：升级工具是**采用方唯一会跑的破坏性操作**。它错了不是"提示难看"，
 而是把人家的仓库改坏。lint 自测守的是判据，这里守的是"改文件"本身。
@@ -21,6 +24,7 @@
 依赖：python3（仅测试用）。升级引擎本体只依赖 bash 3.2+ / awk / sed / cp / sha256。
 """
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -81,8 +85,11 @@ def version_of(keel_dir):
     return ""
 
 
-def run_upgrade(args, cwd):
-    p = subprocess.run([BASH, UPGRADE] + args, cwd=cwd,
+def run_upgrade(args, cwd, env=None):
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    p = subprocess.run([BASH, UPGRADE] + args, cwd=cwd, env=e,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return p.returncode, p.stdout.decode("utf-8", "replace")
 
@@ -293,6 +300,163 @@ def t_full_gates(root):
     assert_true(rc == 0, "全量门禁升级应成功，实际 %d\n%s" % (rc, out[-1200:]))
     assert_true(out.count("test-lint …") == 2, "升级前后各应跑一次 test-lint")
     assert_true("✅ 通过" in out, "test-lint 未通过")
+
+
+# ---------------- 断点恢复（v3.7.1）----------------
+def pending_path(tgt):
+    return os.path.join(tgt, ".keel-upgrade.pending")
+
+
+def read_pending(tgt):
+    p = pending_path(tgt)
+    assert_true(os.path.isfile(p), "缺断点状态文件: " + p)
+    txt = read(p)
+    d = {"files": []}
+    for line in txt.splitlines():
+        if line.startswith("#") or not line:
+            continue
+        if line.startswith("file\t"):
+            d["files"].append(line.split("\t")[1:])
+        elif "=" in line:
+            k, v = line.split("=", 1)
+            d[k] = v
+    return d
+
+
+def tree_sig(keel_dir):
+    """逐字节 + 权限签名；用来判定"续跑是否与全新升级完全等价"。"""
+    sig = {}
+    for dp, _, fs in os.walk(keel_dir):
+        for f in fs:
+            p = os.path.join(dp, f)
+            rel = os.path.relpath(p, keel_dir)
+            with open(p, "rb") as fh:
+                sig[rel] = (hashlib.sha256(fh.read()).hexdigest(),
+                            os.stat(p).st_mode & 0o777)
+    return sig
+
+
+def inject(args, cwd, fault):
+    return run_upgrade(args, cwd,
+                       env={"KEEL_UPGRADE_TEST_HOOKS": "1", "KEEL_UPGRADE_FAULT": fault})
+
+
+@case("断点①：backup 后中断 → --resume 续跑成功")
+def t_resume_after_backup(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    rc, out = inject(["--target", tgt, "--from", tpl, "--skip-test-lint"], root, "after:backup")
+    assert_true(rc != 0, "故障注入应中断进程，实际退出码 %d\n%s" % (rc, out[-600:]))
+    st = read_pending(tgt)
+    assert_true(st.get("stage") == "backup", "阶段应为 backup，实际 %s" % st.get("stage"))
+    assert_true(st.get("to") == version_of(os.path.join(tpl, "keel")), "pending 目标版本不对")
+    rc, out = run_upgrade(["--target", tgt, "--from", tpl, "--skip-test-lint", "--resume"], root)
+    assert_true(rc == 0, "续跑应成功，实际 %d\n%s" % (rc, out[-800:]))
+    assert_true(version_of(os.path.join(tgt, "keel")) == version_of(os.path.join(tpl, "keel")),
+                "续跑后版本未更新")
+    assert_true("OLD-KERNEL-MARK" not in read(os.path.join(tgt, "keel/checks/keel-lint.sh")),
+                "续跑后旧内核标记仍在")
+    assert_true(not os.path.exists(pending_path(tgt)), "续跑成功后 pending 未清除")
+
+
+@case("断点②：第 3 个文件中途中断 → 续跑结果与全新升级逐字节一致")
+def t_resume_mid_files(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    rc, out = inject(["--target", tgt, "--from", tpl, "--skip-test-lint"], root, "after:file:3")
+    assert_true(rc != 0, "故障注入应中断进程，实际退出码 %d" % rc)
+    st = read_pending(tgt)
+    assert_true(st.get("stage") == "applying", "阶段应为 applying，实际 %s" % st.get("stage"))
+    assert_true(len(st["files"]) == 3, "应记录 3 个已完成文件，实际 %d" % len(st["files"]))
+    rc, out = run_upgrade(["--target", tgt, "--from", tpl, "--skip-test-lint", "--resume"], root)
+    assert_true(rc == 0, "续跑应成功，实际 %d\n%s" % (rc, out[-800:]))
+
+    fresh = make_target(os.path.join(root, "fresh"), "3.4.11")
+    rc2, out2 = run_upgrade(["--target", fresh, "--from", tpl, "--skip-test-lint"], root)
+    assert_true(rc2 == 0, "全新升级应成功，实际 %d\n%s" % (rc2, out2[-800:]))
+    a = tree_sig(os.path.join(tgt, "keel"))
+    b = tree_sig(os.path.join(fresh, "keel"))
+    assert_true(set(a) == set(b), "文件集合不一致: 只在续跑侧 %s / 只在全新侧 %s"
+                % (sorted(set(a) - set(b)), sorted(set(b) - set(a))))
+    for rel in sorted(a):
+        assert_true(a[rel] == b[rel], "文件内容/权限不一致: %s（续跑 %r / 全新 %r）"
+                    % (rel, a[rel], b[rel]))
+    assert_true(not os.path.exists(pending_path(tgt)), "续跑成功后 pending 未清除")
+
+
+@case("断点③：中断后 --rollback → 恢复原字节与权限，pending 清除")
+def t_rollback_after_interrupt(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    before = tree_sig(os.path.join(tgt, "keel"))
+    rc, _ = inject(["--target", tgt, "--from", tpl, "--skip-test-lint"], root, "after:file:3")
+    assert_true(rc != 0, "故障注入应中断进程")
+    assert_true(os.path.isfile(pending_path(tgt)), "中断后未留下 pending")
+    rc, out = run_upgrade(["--target", tgt, "--rollback"], root)
+    assert_true(rc == 0, "回滚应成功，实际 %d\n%s" % (rc, out[-600:]))
+    after = tree_sig(os.path.join(tgt, "keel"))
+    assert_true(before == after, "回滚后与原字节/权限不一致: %s"
+                % sorted(r for r in set(before) | set(after) if before.get(r) != after.get(r)))
+    assert_true(not os.path.exists(pending_path(tgt)), "回滚后 pending 未清除")
+
+
+@case("断点④：续跑前已完成文件被外部改动 → 拒绝续跑，只允许回滚")
+def t_resume_tampered(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    rc, _ = inject(["--target", tgt, "--from", tpl, "--skip-test-lint"], root, "after:file:3")
+    assert_true(rc != 0, "故障注入应中断进程")
+    rel = read_pending(tgt)["files"][0][0]
+    with open(os.path.join(tgt, "keel", rel), "a", encoding="utf-8") as fh:
+        fh.write("\n# EXTERNAL-TAMPER\n")
+    rc, out = run_upgrade(["--target", tgt, "--from", tpl, "--skip-test-lint", "--resume"], root)
+    assert_true(rc == 5, "应拒绝续跑（exit 5），实际 %d\n%s" % (rc, out[-600:]))
+    assert_true("拒绝续跑" in out and "只允许回滚" in out, "提示未说明「拒绝续跑 / 只允许回滚」")
+    assert_true("EXTERNAL-TAMPER" in read(os.path.join(tgt, "keel", rel)), "被改动文件被覆盖了")
+    assert_true(os.path.isfile(pending_path(tgt)), "拒绝续跑后 pending 被误删（回滚路径断了）")
+
+
+@case("断点⑤：pending 目标版本与本次命令不一致 → 拒绝跨版本续跑")
+def t_resume_version_mismatch(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    rc, _ = inject(["--target", tgt, "--from", tpl, "--skip-test-lint"], root, "after:backup")
+    assert_true(rc != 0, "故障注入应中断进程")
+    # 造一个"另一个版本"的模板（只改 INDEX 版本行，用来触发目标版本比对）
+    tpl2 = os.path.join(root, "tpl2")
+    shutil.copytree(tpl, tpl2)
+    idx = os.path.join(tpl2, "keel/INDEX.md")
+    txt = "\n".join(("keel-version: 3.9.9" if l.startswith("keel-version:") else l)
+                    for l in read(idx).splitlines()) + "\n"
+    write(idx, txt)
+    rc, out = run_upgrade(["--target", tgt, "--from", tpl2, "--skip-test-lint", "--resume"], root)
+    assert_true(rc == 5, "应拒绝跨版本续跑（exit 5），实际 %d\n%s" % (rc, out[-600:]))
+    assert_true("拒绝续跑" in out and "3.9.9" in out, "提示未指出目标版本不一致")
+    assert_true(os.path.isfile(pending_path(tgt)), "拒绝续跑后 pending 被误删")
+
+
+@case("断点⑥：正常升级成功 → 无残留 pending")
+def t_success_no_pending(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    rc, out = run_upgrade(["--target", tgt, "--from", tpl, "--skip-test-lint"], root)
+    assert_true(rc == 0, "正常升级应成功，实际 %d\n%s" % (rc, out[-600:]))
+    assert_true("升级完成" in out, "未打印升级完成")
+    assert_true(not os.path.exists(pending_path(tgt)), "成功路径残留 pending")
+    assert_true(not [f for f in os.listdir(tgt) if "pending" in f], "目标根下残留 pending 临时文件")
+
+
+@case("断点⑦：只设 FAULT 不设 TEST_HOOKS → 故障注入失效，正常升级照旧成功")
+def t_fault_guard(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    rc, out = run_upgrade(["--target", tgt, "--from", tpl, "--skip-test-lint"], root,
+                          env={"KEEL_UPGRADE_FAULT": "after:backup"})
+    assert_true(rc == 0, "故障注入未被防护住，实际 %d\n%s" % (rc, out[-600:]))
+    assert_true("忽略 KEEL_UPGRADE_FAULT" in out, "未提示故障注入被忽略")
+    assert_true(version_of(os.path.join(tgt, "keel")) == version_of(os.path.join(tpl, "keel")),
+                "正常升级未完成")
+    assert_true(not os.path.exists(pending_path(tgt)), "成功路径残留 pending")
 
 
 def main():

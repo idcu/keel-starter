@@ -1,11 +1,11 @@
-# keel-manifest v1 version=3.7.0 generated=2026-11-02
+# keel-manifest v1 version=3.7.1 generated=2026-11-03
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455
 kernel	checks/keel-lint.sh	755	3e2d39106dfe4f999fa8e0404859ea52f9ff0657697499e1db64e2893b3ece27
 kernel	checks/test-lint.sh	755	93f5861d880a7dc4ba225527e708e0c26f869e832e1eaa8cb36e933b14a7f4d3
 kernel	checks/test-lint.py	644	7806cc03f5a3692ba34f7acf44b8ff4e80bf418299073b72fba46bffc658e598
-kernel	checks/keel-upgrade.sh	755	00c392d2e4d79a51663549bea8ee4aefa4f731d1a3051e99e3b59a814c5ec174
+kernel	checks/keel-upgrade.sh	755	dde2e504da4d07cdeb38c9578264409de30b04f2deacae2de9e3fb8c3b69513b
 kernel	checks/compliance.sh	755	f6bb1d47f3cf81b41f5e0e5b400f52bdf5e55e86c3ad1551888e2147d5fbe270
 kernel	checks/load-estimate.sh	755	c73b2c5fec37ac3c92e77b6016b644828f986609929f3c6368d530f43d3a0e48
 kernel	checks/keel-lite.sh	755	e41f5e113c2dedf5f6da1e2324de8d8e24af898b22601768d9a3aeb5e86d80ae
@@ -19,7 +19,7 @@ kernel	checks/perf-findings.txt	644	737203604e732c5a8fdd8e7a37ffbb4f68d2d7247d74
 kernel	checks/mcp/keel-mcp-server.py	755	f09e0288d0824a91f911565e0dbaf21d71454b5618527f97e252daa6b5909b5a
 kernel	checks/retrieval/keel-search.py	755	f83298592609e6ee9c6a6dee1a529bd3815ff7ade9c532d08feb7bb3e1e7b821
 kernel	checks/test-upgrade.sh	755	7212b8881d058e0d36981e51dc2622d06f42bc2d64e2bc184411e85e185cfc70
-kernel	checks/test-upgrade.py	644	121310ecc3b291de3b93dc419b1a9925c3e4bc6d2b6a4382f80348b237c79dcd
+kernel	checks/test-upgrade.py	644	b516ca7920721abfc5ed07a68f9f64bf44cbd50918aae3b6d84110b541b0aaeb
 kernel	checks/hooks/pre-commit	755	9920408d87c4f72d9d4b89a5b8ddd9102b63eb9318fa1c6dc05677fff908c56b
 kernel	checks/hooks/commit-msg	755	f87ae2a27c611999aa7ec294f13c2cf5049238967e465d9118bc40a667256a6b
 merge	INDEX.md	644	
