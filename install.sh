@@ -84,37 +84,17 @@ fi
 
 echo "── 2. 装文件"
 if [ "$EXISTING" -eq 1 ]; then
-  # 只补缺失与工具链，**不覆盖**用户的 INDEX/NOW/pitfalls/decisions
-  # （对应设计稿 §12.3：升级按字段增量合并，不允许一键覆盖）
-  # 工具链逐个补：这些是"实现"，升级应当覆盖（用户改的是文档，不是脚本）
-  # compliance.sh 也在列——漏了它，老用户升级后就没有基线记录能力
-  for f in checks/budget.env checks/keel-lint.sh checks/load-estimate.sh \
-           checks/keel-lite.sh checks/verify-hooks.sh checks/install-hooks.sh \
-           checks/compliance.sh checks/check-mcp-config.sh checks/keel-doctor.sh \
-           checks/perf-findings.txt \
-           checks/mcp/keel-mcp-server.py \
-           checks/hooks/pre-commit checks/hooks/commit-msg; do
-    if [ -e "$tmp/starter/keel/$f" ]; then
-      # keel-doctor.sh 例外：**总是覆盖**。它是纯诊断脚本（只读不改），
-      # 没有"用户改过"这种语义——留在旧版等于让新用户拿不到能用的诊断入口。
-      # 漏一个文件的代价实测过：老用户升级后 doctor 脚本不存在，
-      # 而白名单不补它**没有任何检查会报**（工具链缺失不在判据覆盖内）。
-      case "$f" in
-        checks/keel-doctor.sh|checks/perf-findings.txt)
-          cp -R "$tmp/starter/keel/$f" "$TARGET/keel/$f" && echo "   ↑ 更新 $f（诊断/记录类总是最新）" ;;
-        *)
-          if [ -e "$TARGET/keel/$f" ]; then
-            echo "   · 保留 $f（你的版本）"
-          else
-            cp -R "$tmp/starter/keel/$f" "$TARGET/keel/$f" && echo "   + 补上 $f"
-          fi ;;
-      esac
-    fi
-  done
-  # 新增层（目录不存在才复制）
-  for d in contracts env skills decisions; do
-    [ -d "$TARGET/keel/$d" ] || { cp -R "$tmp/starter/keel/$d" "$TARGET/keel/$d" 2>/dev/null && echo "   + 补上 $d/"; }
-  done
+  # v3.6.0：已有 keel/ 时**不再**走"白名单逐个补"——那条路径漏了 test-lint.py，
+  # 且对已存在工具链一律「保留」，实测导致 v3.4.11 的存量采用方拿不到 v3.5.0 的
+  # locale 修复（只能手工逐文件同步）。现在统一交给模板自带的升级引擎（ADR 0020）。
+  # 引导说明：≤3.5.0 的仓库没有 upgrade 脚本，重跑本 install.sh 就是它的升级入口。
+  UP="$tmp/starter/keel/checks/keel-upgrade.sh"
+  if [ ! -f "$UP" ]; then
+    echo "❌ 该模板没有 keel/checks/keel-upgrade.sh（<3.6 的模板不支持就地升级）"
+    echo "   要么去掉 --ref 跟随最新版，要么手工同步工具链后重试"
+    exit 2
+  fi
+  bash "$UP" --target "$TARGET" --from "$tmp/starter" || exit $?
 else
   cp -R "$tmp/starter/keel" "$TARGET/keel" && echo "   + 已复制 keel/（含 checks / hooks / 模板）"
 fi

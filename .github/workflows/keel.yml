@@ -14,6 +14,11 @@ jobs:
       - name: 自测（lint 能判死它声称能判死的问题）
         run: bash keel/checks/test-lint.sh
 
+      # 升级引擎也要"验谎"：改 manifest 或改分类逻辑后，五类场景（正常/跨版本/
+      # 保留自定义/失败回滚/幂等）必须有机器证明，否则一条命令升级就是空口承诺
+      - name: 升级引擎自测（10 项场景）
+        run: bash keel/checks/test-upgrade.sh
+
       - name: 内核校验（预算 / frontmatter / 值域 / 命名 / 登记 / 死链 / 孤儿 / 陈旧 / 状态机 / 闭环钩子）
         run: bash keel/checks/keel-lint.sh keel
 
