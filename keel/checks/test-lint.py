@@ -498,6 +498,40 @@ def check_doc_consistency():
     return False, "DESIGN.md 里找不到 §9.3 的脚本代码块"
 
 
+def check_locale_isolation(base):
+    """判死 locale 泄漏：段 3 的 LC_ALL 不得泄漏成持久变量影响段 4。
+
+    两个判据（行为 + 结构）：
+    ① 行为：在 UTF-8 locale 下跑合法基线，段 4 不得把小写 kebab-case 文件名
+       误报为「命名含大写」。若段 4 用 `[A-Z]` 且段 3 泄漏被消除，
+       bash 3.2 UTF-8 下 glob 按 collation 展开会匹配小写 → 假阳性。
+    ② 结构：脚本里不得出现 `LC_ALL=C <var>=...;` 形式的泄漏赋值
+       （LC_ALL 必须作为命令前缀，如 `LC_ALL=C xrun`）。
+    见坑 bash3-utf8-varname-eats-byte / 设计稿 §9.1-8。
+    """
+    bash = shutil.which("bash") or "bash"
+    # ① 行为：UTF-8 locale 下合法基线不应有「命名含大写」
+    env = dict(os.environ)
+    env["LC_ALL"] = "zh_CN.UTF-8"
+    env["LANG"] = "zh_CN.UTF-8"
+    p = subprocess.run([bash, LINT, "keel"], cwd=base,
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+    out = p.stdout.decode("utf-8", "replace")
+    false_upper = [l for l in out.splitlines() if "命名含大写" in l]
+    if false_upper:
+        return False, ("UTF-8 locale 下段 4 误报 %d 条「命名含大写」——"
+                       "段 4 glob 非 locale 无关或段 3 泄漏已失: %s"
+                       % (len(false_upper), false_upper[0][:80]))
+    # ② 结构：不得有泄漏形式 `LC_ALL=C VAR=...;`（排除注释行）
+    src = open(LINT, encoding="utf-8").read()
+    code_lines = [l for l in src.splitlines() if not l.lstrip().startswith("#")]
+    code = "\n".join(code_lines)
+    leaks = re.findall(r"LC_ALL=C\s+[A-Za-z_][A-Za-z0-9_]*=", code)
+    if leaks:
+        return False, "脚本含 %d 处 LC_ALL 泄漏赋值（应为命令前缀）: %s" % (len(leaks), leaks[0])
+    return True, "UTF-8/C 双 locale 下段 4 无误报；无 LC_ALL 泄漏赋值"
+
+
 def check_prose_numbers():
     """门面散文里的版本号与自测数字必须与真源一致（ADR 0018）。
 
@@ -732,6 +766,11 @@ def main():
         print("[%s] DOC  脚本与文档一致性          %s" % ("PASS" if doc_ok else "FAIL", doc_msg))
         if not doc_ok:
             bad += 1
+    # LOCALE（坑 bash3-utf8-varname-eats-byte）：段 3 LC_ALL 不得泄漏，段 4 须 locale 无关
+    loc_ok, loc_msg = check_locale_isolation(base)
+    print("[%s] LOCALE 段 3/4 locale 隔离          %s" % ("PASS" if loc_ok else "FAIL", loc_msg))
+    if not loc_ok:
+        bad += 1
     # PROSE（ADR 0018）：门面散文数字与真源一致——与 DOC 同族，不进用例分母
     prose_ok, prose_msg = check_prose_numbers()
     if prose_ok is None:
