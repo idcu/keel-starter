@@ -26,7 +26,7 @@ AI 对源码零编辑、然后宣布完成。
 ## 第1 步 · 装（30 秒）
 
 ```bash
-git clone --depth 1 --branch v3.4.6 https://gitee.com/idcu/keel-starter.git
+git clone --depth 1 --branch v3.6.0 https://gitee.com/idcu/keel-starter.git
 bash keel-starter/install.sh /你的项目根 --with-anchor
 ```
 
@@ -59,7 +59,7 @@ bash keel/checks/keel-doctor.sh
 1. 闭环门禁  ✅ 锚点在 AGENTS.md ·钩子本体在 · 已挂载 —— 闭环成立
 2. 内核校验  ✅ 0 fail · 0 warn（20s）
 3. 上下文预算 ✅ 检索「遵守率」需 14672 字节（预算 15000，余量 328）
-4. 判据自检⏳ 跑全量自测要几分钟（41 个故障注入 + 元检查 + 文档一致性）…
+4. 判据自检⏳ 跑全量自测约十几秒（42 个故障注入 + 元检查 + 文档一致性）…
 5. 还差你亲手   ☐ keel/INDEX.md 路由表还有占位——换成你项目的真实入口
 ```
 
@@ -73,7 +73,7 @@ bash keel/checks/keel-doctor.sh
 | 4 判据自检 | **你手上的 lint 能不能判死它声称能判死的问题** | 建议跑一次（要几分钟）。改判据时用 `--only` 只跑相关用例（秒级） |
 | 5 还差你亲手 | 机器替不了的部分 | 只有你知道你的项目是什么 |
 
-**第 4 项值得单独说**：全量要十几分钟（41 例 ×完整 lint）。改判据时**只跑你改的那几条**：
+**第 4 项值得单独说**：全量约十几秒（42 例 ×完整 lint）。改判据时**只跑你改的那几条**：
 
 ```bash
 bash keel/checks/test-lint.sh --only 06,39-41     # 秒级
@@ -81,7 +81,7 @@ bash keel/checks/test-lint.sh --only 06,39-41     # 秒级
 
 ⚠️ 子集通过**不等于**可以发版——子集漏掉的用例不会报，发版前仍须全量。
 
-它跑的是 41 个"故障注入"用例——每个都故意制造一处缺陷，
+它跑的是 42 个"故障注入"用例——每个都故意制造一处缺陷，
 然后验证 lint 真的报出来。这验的不是你的仓库，而是**你的 lint 到底有没有牙**。
 没有它，你就是在用一套"看起来很严"的规则，实际上一条都判不死。
 
@@ -155,6 +155,8 @@ bash keel/checks/keel-lite.sh keel --apply   # 确认后执行；裁完自动跑
 ---
 
 ## 3 分钟之后
+
+装好、日常运维、升级与回滚的完整清单见 [QUICKSTART.md](QUICKSTART.md)。
 
 如果你装完跑完doctor，看到 1–4 项都是 ✅，那**唯一剩下要做的事是**：
 
