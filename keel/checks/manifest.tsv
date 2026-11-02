@@ -1,4 +1,4 @@
-# keel-manifest v1 version=3.6.0 generated=2026-11-02
+# keel-manifest v1 version=3.6.1 generated=2026-11-02
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455
@@ -19,7 +19,7 @@ kernel	checks/perf-findings.txt	644	737203604e732c5a8fdd8e7a37ffbb4f68d2d7247d74
 kernel	checks/mcp/keel-mcp-server.py	644	f09e0288d0824a91f911565e0dbaf21d71454b5618527f97e252daa6b5909b5a
 kernel	checks/retrieval/keel-search.py	644	f83298592609e6ee9c6a6dee1a529bd3815ff7ade9c532d08feb7bb3e1e7b821
 kernel	checks/test-upgrade.sh	755	7212b8881d058e0d36981e51dc2622d06f42bc2d64e2bc184411e85e185cfc70
-kernel	checks/test-upgrade.py	644	d135f1e82a4bce2b6c9e542559d5fd2a7967fbf8050dd7631153a4fb64c8ee68
+kernel	checks/test-upgrade.py	644	af09f73c6aaa221497fbdaa2fda09117e15cda207258b75f50313ddeb69b32a5
 kernel	checks/hooks/pre-commit	755	9920408d87c4f72d9d4b89a5b8ddd9102b63eb9318fa1c6dc05677fff908c56b
 kernel	checks/hooks/commit-msg	755	f87ae2a27c611999aa7ec294f13c2cf5049238967e465d9118bc40a667256a6b
 merge	INDEX.md		

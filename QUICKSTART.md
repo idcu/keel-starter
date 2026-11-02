@@ -1,7 +1,7 @@
 # 五分钟接入 Keel
 
 > 目标：5 分钟内让一个已有项目跑起 Keel 的门禁，并知道下一步只改哪几个文件。
-> 下面的命令都在 2026-11-02 实测通过（v3.6.0）。
+> 下面的命令都在 2026-11-02 实测通过（v3.6.1）。
 
 ## 1. 装（一条命令）
 
@@ -9,7 +9,7 @@
 # 在项目根目录执行（默认不写锚点，只提示）
 bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --with-anchor
 
-# 要固定版本（推荐）：--ref v3.6.0
+# 要固定版本（推荐）：--ref v3.6.1
 # 已 clone 了模板：bash install.sh <项目根> --with-anchor
 ```
 
@@ -45,7 +45,7 @@ bash keel/checks/test-lint.sh          # 必须 43/43（42 用例 + 1 元检查�
 
 ```bash
 bash keel/checks/keel-upgrade.sh --target . --dry-run   # 先看计划（不动文件）
-bash keel/checks/keel-upgrade.sh --target . --to v3.6.0 # 升级：前后各跑一次门禁
+bash keel/checks/keel-upgrade.sh --target . --to v3.6.1 # 升级：前后各跑一次门禁
 bash keel/checks/keel-upgrade.sh --target . --rollback  # 回到最近一次升级前
 ```
 

@@ -54,6 +54,25 @@ def write(p, text):
         fh.write(text)
 
 
+def _shipable(keel_dir):
+    """这个 keel/ 能不能单独分发？规格仓里的实例会引用仓外文件（../DESIGN.md 等），
+    fixture 里没有它们，升级前门禁会因死链失败——那不是引擎的错。"""
+    try:
+        return "../" not in read(os.path.join(keel_dir, "INDEX.md"))
+    except OSError:
+        return False
+
+
+# 规格仓（本项目）里的 keel/ 是实例，不是可分发模板：自动改用同级发布仓的模板，
+# 否则 8 个用例会全部卡在"fixture 缺 ../DESIGN.md"这一步（实测踩过）。
+if not _shipable(KEEL):
+    _sibling = os.path.normpath(os.path.join(KEEL, "..", "keel-starter", "keel"))
+    if _shipable(_sibling):
+        print("· 本 keel/ 是规格仓实例（引用仓外文件），改用发布模板: %s" % _sibling)
+        KEEL = _sibling
+        UPGRADE = os.path.join(_sibling, "checks", "keel-upgrade.sh")
+
+
 def version_of(keel_dir):
     for line in read(os.path.join(keel_dir, "INDEX.md")).splitlines():
         if line.startswith("keel-version:"):
