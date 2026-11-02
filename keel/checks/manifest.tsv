@@ -1,4 +1,4 @@
-# keel-manifest v1 version=3.7.1 generated=2026-11-03
+# keel-manifest v1 version=3.7.2 generated=2026-11-03
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455

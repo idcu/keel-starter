@@ -55,7 +55,7 @@ bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --r
 
 ```bash
 bash keel/checks/keel-upgrade.sh --target . --dry-run   # 先看计划（不动文件）
-bash keel/checks/keel-upgrade.sh --target . --to v3.7.0 # 升级：前后各跑一次门禁
+bash keel/checks/keel-upgrade.sh --target . --to v3.7.2 # 升级：前后各跑一次门禁
 bash keel/checks/keel-upgrade.sh --target . --rollback  # 回到最近一次升级前
 ```
 
@@ -64,6 +64,8 @@ bash keel/checks/keel-upgrade.sh --target . --rollback  # 回到最近一次升�
   新增结构文件只在父目录已存在时补齐。
 - 升级后门禁任一失败会**自动整目录回滚**（备份在 `.keel-backup/`，保留最近 3 份）。
 - 已是目标版本会明说「无需升级」，重复执行不产生改动。
+- 升级**中途被强杀**（Ctrl-C / 断网 / 磁盘满）：重跑会提示存在未完成升级并 `exit 5`；
+  `--resume` 只处理剩余文件（先校验已写文件 sha256），`--rollback` 整目录还原字节与权限。
 
 ## 5. 常见失败怎么查
 
@@ -73,7 +75,7 @@ bash keel/checks/keel-upgrade.sh --target . --rollback  # 回到最近一次升�
 | `❌ 闭环钩子` | `bash keel/checks/verify-hooks.sh .` | `bash keel/checks/install-hooks.sh`（`core.hooksPath` 是本地设置，不进版本库） |
 | `❌ 超预算` | `bash keel/checks/load-estimate.sh <关键词>` | 先换更准的关键词；确实词准仍超 → 按拆/提/沉处理 |
 | `⚠️ 陈旧` | 文件 frontmatter 的 `last-verified` | 复核后改日期；ADR/坑库有豁免，别为消警告而刷日期 |
-| `bash: keel/checks/keel-upgrade.sh: No such file` | `ls keel/checks/keel-upgrade.sh` | 你停在 ≤3.5.0，还没有升级引擎；重跑 `install.sh --ref v3.7.0`（见 §4 开头） |
+| `bash: keel/checks/keel-upgrade.sh: No such file` | `ls keel/checks/keel-upgrade.sh` | 你停在 ≤3.5.0，还没有升级引擎；重跑 `install.sh --ref v3.7.2`（见 §4 开头） |
 | 自测失败 | `bash keel/checks/test-lint.sh --only <编号>` | 先定位是哪条判据，再改 lint 与 §9.3 文档（同一个动作） |
 | 中文/编码异常 | `locale`、`bash --version` | bash 3.2 下变量后紧跟中文必须写 `${var}`（见 CONSTITUTION rule 7） |
 
