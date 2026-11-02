@@ -7,10 +7,11 @@
 #                                    [--no-rollback] [--skip-test-lint]
 #   bash keel/checks/keel-upgrade.sh --rollback [备份目录]
 #   bash keel/checks/keel-upgrade.sh --regen-manifest <keel目录>   # 发布方专用
+#   bash keel/checks/keel-upgrade.sh --check-manifest <keel目录>   # 发布方 / CI
 #
 # 退出码:
-#   0 = 升级完成 / 已是目标版本（无需升级）/ 回滚完成
-#   1 = 升级前门禁未通过（未改动任何文件）
+#   0 = 升级完成 / 已是目标版本（无需升级）/ 回滚完成 / manifest 一致
+#   1 = 升级前门禁未通过（未改动任何文件）/ manifest 与实际文件不一致
 #   2 = 用法 / 环境 / 模板校验错误
 #   3 = 升级后门禁失败，已自动回滚
 #   4 = 升级后门禁失败，未回滚（--no-rollback）
@@ -35,7 +36,7 @@ REPO_DEFAULT="https://gitee.com/idcu/keel-starter.git"
 BACKUP_KEEP=3
 
 TARGET=""; TO=""; FROM=""; DRY=0; FORCE=0; NO_ROLLBACK=0; SKIP_TL=0
-REGEN=""; RB=""; RB_SET=0
+REGEN=""; CHECK=""; RB=""; RB_SET=0
 
 usage() {
   sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -56,6 +57,8 @@ while [ $# -gt 0 ]; do
     --no-rollback) NO_ROLLBACK=1; shift ;;
     --skip-test-lint) SKIP_TL=1; shift ;;
     --regen-manifest) [ $# -ge 2 ] || die 2 "--regen-manifest 后面要跟 keel 目录"; REGEN="$2"; shift 2 ;;
+    --check-manifest) [ $# -ge 2 ] || die 2 "--check-manifest 后面要跟 keel 目录"; CHECK="$2"; shift 2 ;;
+    --check-manifest=*) CHECK="${1#--check-manifest=}"; shift ;;
     --rollback) RB_SET=1; shift; [ $# -gt 0 ] && case "$1" in -*) ;; *) RB="$1"; shift ;; esac ;;
     -h|--help) usage; exit 0 ;;
     -*) die 2 "未知参数: $1" ;;
@@ -72,6 +75,12 @@ sha256_of() {
 }
 command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
   || command -v openssl >/dev/null 2>&1 || die 2 "需要 sha256sum / shasum / openssl 之一（校验模板完整性）"
+
+# 权限位：macOS 的 stat 是 BSD 语法（-f %Lp），Linux 是 GNU（-c %a）
+file_mode() {
+  if stat -c %a "$1" >/dev/null 2>&1; then stat -c %a "$1" 2>/dev/null
+  else stat -f %Lp "$1" 2>/dev/null; fi
+}
 
 read_version() { sed -n 's/^keel-version:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$1" 2>/dev/null | head -1; }
 
@@ -105,6 +114,7 @@ if [ -n "$REGEN" ]; then
     cat=$(printf '%s' "$line" | cut -f1)
     rel=$(printf '%s' "$line" | cut -f2)
     mode=$(printf '%s' "$line" | cut -f3)
+    if [ -f "$K/$rel" ]; then mode=$(file_mode "$K/$rel"); fi   # 权限以磁盘为准
     if [ "$cat" = "kernel" ]; then
       [ -f "$K/$rel" ] || { echo "⚠️  kernel 行指向不存在的文件: $rel"; stale=1; continue; }
       h=$(sha256_of "$K/$rel")
@@ -117,10 +127,70 @@ if [ -n "$REGEN" ]; then
   find "$K/checks" -type f ! -name '*.log' ! -name 'manifest.tsv' 2>/dev/null | sed "s#$K/##" | sort | while IFS= read -r rel; do
     grep -q "^[^#].*	$rel	" "$M" || echo "⚠️  未登记在 manifest 的文件: ${rel}（按需加 kernel/additive/preserve 行）"
   done
+  # 先判再落盘：否则 kernel 行指向缺失文件时会把坏清单写下去，等于"拒绝发布"却留下残缺清单
+  [ "$stale" -eq 0 ] || { echo "❌ 有 kernel 行指向缺失文件，拒绝发布（原清单未改动）"; exit 2; }
   mv "$tmpm" "$M"
   echo "✅ 已重算 manifest: ${M}（version=${V}）"
-  [ "$stale" -eq 0 ] || { echo "❌ 有 kernel 行指向缺失文件，拒绝发布"; exit 2; }
   exit 0
+fi
+
+# ---------- --check-manifest（发布方 / CI：清单与实际文件是否一致）----------
+# 为什么要有它：改过 kernel 文件却忘重算 sha256，升级时才会在采用方机器上报
+# 「模板文件校验和不符」——那是**升级失败**，不是发布前能发现的问题。
+if [ -n "$CHECK" ]; then
+  K=$(cd "$CHECK" && pwd) || die 2 "目录不存在: $CHECK"
+  M="$K/checks/manifest.tsv"
+  [ -f "$M" ] || die 2 "缺 ${M}"
+  bad=0; n=0
+  hv=$(sed -n '1s/.*version=\([^ ]*\).*/\1/p' "$M" | head -1)
+  iv=$(read_version "$K/INDEX.md")
+  if [ -n "$hv" ] && [ -n "$iv" ] && [ "$hv" != "$iv" ]; then
+    echo "❌ 版本漂移: manifest 头 version=${hv}，INDEX 是 ${iv}（跑 --regen-manifest 重算）"
+    bad=$((bad + 1))
+  fi
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    cat=$(printf '%s' "$line" | cut -f1)
+    rel=$(printf '%s' "$line" | cut -f2)
+    mode=$(printf '%s' "$line" | cut -f3)
+    want=$(printf '%s' "$line" | cut -f4)
+    n=$((n + 1))
+    f="$K/$rel"
+    case "$cat" in
+      kernel)
+        if [ ! -f "$f" ]; then
+          echo "❌ 文件缺失: ${rel}"; bad=$((bad + 1)); continue
+        fi
+        got=$(sha256_of "$f")
+        if [ "$got" != "$want" ]; then
+          echo "❌ 哈希漂移: ${rel}"
+          echo "   期望 ${want}"
+          echo "   实际 ${got}"
+          bad=$((bad + 1)); continue
+        fi ;;
+      additive) [ -f "$f" ] || continue ;;
+      *) continue ;;
+    esac
+    if [ -n "$mode" ] && [ -f "$f" ]; then
+      gotm=$(file_mode "$f")
+      case "$gotm" in ''|*[!0-9]*) gotm="" ;; esac
+      while [ -n "$gotm" ]; do case "$gotm" in 0*) gotm=${gotm#0} ;; *) break ;; esac; done
+      if [ -n "$gotm" ] && [ "$gotm" != "$mode" ]; then
+        echo "❌ 权限不符: ${rel}（期望 ${mode} / 实际 ${gotm}）"; bad=$((bad + 1))
+      fi
+    fi
+  done < "$M"
+  # 反向：checks/ 下有文件没登记——等于它永远不会被分发（新内核文件最容易这样丢）
+  find "$K/checks" -type f ! -name '*.log' ! -name 'manifest.tsv' 2>/dev/null \
+    | sed "s#${K}/##" | sort | while IFS= read -r rel; do
+      grep -q "^[^#].*	${rel}	" "$M" || echo "⚠️  未登记的文件: ${rel}（不会被分发；确认后加 manifest 行）"
+    done
+  if [ "$bad" -eq 0 ]; then
+    echo "✅ manifest 与实际文件一致（${n} 行）"
+    exit 0
+  fi
+  echo "❌ manifest 与实际文件不一致：${bad} 项（发布方跑 --regen-manifest 重算）"
+  exit 1
 fi
 
 # ---------- --rollback ----------

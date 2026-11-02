@@ -12,7 +12,8 @@
       ③ 升级前后各跑门禁（lint / test-lint / 预算固定成本）
       ④ 升级后门禁失败 → 自动回滚到升级前
       ⑤ 幂等：重复执行 / 已是目标版本 → 明确「无需升级」，不产生额外改动
-    另加两条防腐烂断言：manifest 校验和必须与模板实际文件一致；dry-run 零改动。
+    另加三条防腐烂断言：manifest 与实际文件一致（含权限位）、改 kernel 不改清单必须判死、
+    dry-run 零改动。
 
 为什么需要它：升级工具是**采用方唯一会跑的破坏性操作**。它错了不是"提示难看"，
 而是把人家的仓库改坏。lint 自测守的是判据，这里守的是"改文件"本身。
@@ -261,29 +262,25 @@ def t_dry(root):
 
 @case("manifest 校验和与模板实际文件一致（防清单腐烂）")
 def t_manifest(_root):
-    mf = os.path.join(KEEL, "checks/manifest.tsv")
-    assert_true(os.path.isfile(mf), "模板缺 checks/manifest.tsv")
-    rows = 0
-    for line in read(mf).splitlines():
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split("\t")
-        assert_true(len(parts) >= 2, "manifest 行列数不对: " + line)
-        cat, rel = parts[0], parts[1]
-        assert_true(cat in ("kernel", "merge", "preserve", "additive"), "未知分类: " + cat)
-        p = os.path.join(KEEL, rel)
-        assert_true(os.path.exists(p), "manifest 指向不存在的文件: " + rel)
-        if cat == "kernel":
-            rows += 1
-            want = parts[3] if len(parts) > 3 else ""
-            assert_true(len(want) == 64, "kernel 行缺 sha256: " + rel)
-            h = subprocess.run(["shasum" if shutil.which("shasum") else "sha256sum",
-                                "-a", "256", p] if shutil.which("shasum") else ["sha256sum", p],
-                               stdout=subprocess.PIPE).stdout.decode().split()[0]
-            assert_true(h == want, "校验和过期（跑 --regen-manifest）: " + rel)
-        if parts[0] == "merge":
-            assert_true(rel == "INDEX.md", "merge 类只允许 INDEX.md: " + rel)
-    assert_true(rows >= 10, "kernel 文件太少，manifest 疑似残缺")
+    rc, out = run_upgrade(["--check-manifest", KEEL], os.path.dirname(KEEL))
+    assert_true(rc == 0, "模板 manifest 与实际文件不一致（rc=%d）：\n%s" % (rc, out))
+    assert_true("manifest 与实际文件一致" in out, "校验器没打印结论：\n" + out)
+
+
+@case("manifest 守卫：改 kernel 不改清单 → 判死；重算后 → 通过")
+def t_manifest_guard(root):
+    tpl = template_copy(root)
+    k = os.path.join(tpl, "keel/checks/keel-lint.sh")
+    with open(k, "a", encoding="utf-8") as fh:
+        fh.write("\n# DRIFT-MARK\n")
+    rc, out = run_upgrade(["--check-manifest", os.path.join(tpl, "keel")], root)
+    assert_true(rc == 1, "改过 kernel 却未判死（rc=%d）：\n%s" % (rc, out))
+    assert_true("checks/keel-lint.sh" in out, "没指出是哪个文件漂移：\n" + out)
+    assert_true("期望" in out and "实际" in out, "没给出期望/实际哈希：\n" + out)
+    rc, out = run_upgrade(["--regen-manifest", os.path.join(tpl, "keel")], root)
+    assert_true(rc == 0, "重算 manifest 失败（rc=%d）：\n%s" % (rc, out))
+    rc, out = run_upgrade(["--check-manifest", os.path.join(tpl, "keel")], root)
+    assert_true(rc == 0, "重算后仍不一致（rc=%d）：\n%s" % (rc, out))
 
 
 @case("门禁全量跑：升级前后 lint + test-lint")

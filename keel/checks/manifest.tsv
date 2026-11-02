@@ -1,11 +1,11 @@
-# keel-manifest v1 version=3.6.1 generated=2026-11-02
+# keel-manifest v1 version=3.7.0 generated=2026-11-02
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455
 kernel	checks/keel-lint.sh	755	3e2d39106dfe4f999fa8e0404859ea52f9ff0657697499e1db64e2893b3ece27
 kernel	checks/test-lint.sh	755	93f5861d880a7dc4ba225527e708e0c26f869e832e1eaa8cb36e933b14a7f4d3
 kernel	checks/test-lint.py	644	7806cc03f5a3692ba34f7acf44b8ff4e80bf418299073b72fba46bffc658e598
-kernel	checks/keel-upgrade.sh	755	551c49dbda0291c8cf5cd9bc23113057b09ca04ece50431ea8310335daaee05f
+kernel	checks/keel-upgrade.sh	755	00c392d2e4d79a51663549bea8ee4aefa4f731d1a3051e99e3b59a814c5ec174
 kernel	checks/compliance.sh	755	f6bb1d47f3cf81b41f5e0e5b400f52bdf5e55e86c3ad1551888e2147d5fbe270
 kernel	checks/load-estimate.sh	755	c73b2c5fec37ac3c92e77b6016b644828f986609929f3c6368d530f43d3a0e48
 kernel	checks/keel-lite.sh	755	e41f5e113c2dedf5f6da1e2324de8d8e24af898b22601768d9a3aeb5e86d80ae
@@ -16,57 +16,57 @@ kernel	checks/check-mcp-config.sh	755	d669d2f04a09ba3e4ffc7f993c70e22861639868df
 kernel	checks/keel-doctor.sh	644	48f646a3ce330e0d9eb89494ec48344900c3a2fd98bc25e2b5c7cb75f6b27b17
 kernel	checks/perf-baseline.sh	644	bc39f01a71f493337c676889894fe637797e720adfee72da7abc83820a2b72fb
 kernel	checks/perf-findings.txt	644	737203604e732c5a8fdd8e7a37ffbb4f68d2d7247d743d33d96aa7342a152367
-kernel	checks/mcp/keel-mcp-server.py	644	f09e0288d0824a91f911565e0dbaf21d71454b5618527f97e252daa6b5909b5a
-kernel	checks/retrieval/keel-search.py	644	f83298592609e6ee9c6a6dee1a529bd3815ff7ade9c532d08feb7bb3e1e7b821
+kernel	checks/mcp/keel-mcp-server.py	755	f09e0288d0824a91f911565e0dbaf21d71454b5618527f97e252daa6b5909b5a
+kernel	checks/retrieval/keel-search.py	755	f83298592609e6ee9c6a6dee1a529bd3815ff7ade9c532d08feb7bb3e1e7b821
 kernel	checks/test-upgrade.sh	755	7212b8881d058e0d36981e51dc2622d06f42bc2d64e2bc184411e85e185cfc70
-kernel	checks/test-upgrade.py	644	af09f73c6aaa221497fbdaa2fda09117e15cda207258b75f50313ddeb69b32a5
+kernel	checks/test-upgrade.py	644	121310ecc3b291de3b93dc419b1a9925c3e4bc6d2b6a4382f80348b237c79dcd
 kernel	checks/hooks/pre-commit	755	9920408d87c4f72d9d4b89a5b8ddd9102b63eb9318fa1c6dc05677fff908c56b
 kernel	checks/hooks/commit-msg	755	f87ae2a27c611999aa7ec294f13c2cf5049238967e465d9118bc40a667256a6b
-merge	INDEX.md		
-preserve	CONSTITUTION.md		
-preserve	NOW.md		
-preserve	ARCHITECTURE.md		
-preserve	GLOSSARY.md		
-preserve	checks/rules.md		
-preserve	checks/budget.env		
-preserve	checks/.metrics/load.jsonl		
-preserve	checks/.metrics/violations.jsonl		
-preserve	contracts/INDEX.md		
-preserve	decisions/INDEX.md		
-preserve	env/INDEX.md		
-preserve	env/setup.md		
-preserve	pitfalls/INDEX.md		
-preserve	skills/INDEX.md		
-additive	archive/.gitkeep		
-additive	archive/safe-delete-full.md		
-additive	NOW-history/.gitkeep		
-additive	contracts/_template.schema.json		
-additive	decisions/_template.md		
-additive	pitfalls/_template.md		
-additive	skills/_template.md		
-preserve	decisions/0001-budget-three-constraints.md		
-preserve	decisions/0002-machine-verified-entry.md		
-preserve	decisions/0003-hook-counted-triggers.md		
-preserve	decisions/0004-orphan-link-graph.md		
-preserve	decisions/0005-verify-hooks.md		
-preserve	decisions/0006-session-load-budget.md		
-preserve	decisions/0007-mcp-readonly-and-retrieval-slot.md		
-preserve	decisions/0008-batch-fork-and-time-budget.md		
-preserve	decisions/0009-compliance-rate-objective-only.md		
-preserve	decisions/0010-version-declared-and-fetchable.md		
-preserve	decisions/archive/0009-evidence.md		
-preserve	decisions/archive/0011-backfill-is-not-compliance-rate.md		
-preserve	pitfalls/db/connection-pool-exhausted.md		
-preserve	pitfalls/meta/arg-parse-shift-while-iterating.md		
-preserve	pitfalls/meta/awk-string-vs-number-compare.md		
-preserve	pitfalls/meta/byte-budget-assumes-lf.md		
-preserve	pitfalls/meta/cold-zone-link-prefix.md		
-preserve	pitfalls/meta/command-substitution-eats-newline.md		
-preserve	pitfalls/meta/handwritten-json-nan-placeholder.md		
-preserve	pitfalls/meta/install-verifies-wrong-dir.md		
-preserve	pitfalls/meta/link-syntax-example-becomes-real-link.md		
-preserve	pitfalls/meta/wc-total-line-treated-as-file.md		
-preserve	pitfalls/meta/worktree-eol-differs-from-main.md		
-preserve	pitfalls/meta/xargs-arg-becomes-filename.md		
-preserve	NOW-history/2026-09-30-初始模板.md		
-preserve	NOW-history/2026-10-15-度量回顾.md		
+merge	INDEX.md	644	
+preserve	CONSTITUTION.md	644	
+preserve	NOW.md	644	
+preserve	ARCHITECTURE.md	644	
+preserve	GLOSSARY.md	644	
+preserve	checks/rules.md	644	
+preserve	checks/budget.env	644	
+preserve	checks/.metrics/load.jsonl	644	
+preserve	checks/.metrics/violations.jsonl	644	
+preserve	contracts/INDEX.md	644	
+preserve	decisions/INDEX.md	644	
+preserve	env/INDEX.md	644	
+preserve	env/setup.md	644	
+preserve	pitfalls/INDEX.md	644	
+preserve	skills/INDEX.md	644	
+additive	archive/.gitkeep	644	
+additive	archive/safe-delete-full.md	644	
+additive	NOW-history/.gitkeep	644	
+additive	contracts/_template.schema.json	644	
+additive	decisions/_template.md	644	
+additive	pitfalls/_template.md	644	
+additive	skills/_template.md	644	
+preserve	decisions/0001-budget-three-constraints.md	644	
+preserve	decisions/0002-machine-verified-entry.md	644	
+preserve	decisions/0003-hook-counted-triggers.md	644	
+preserve	decisions/0004-orphan-link-graph.md	644	
+preserve	decisions/0005-verify-hooks.md	644	
+preserve	decisions/0006-session-load-budget.md	644	
+preserve	decisions/0007-mcp-readonly-and-retrieval-slot.md	644	
+preserve	decisions/0008-batch-fork-and-time-budget.md	644	
+preserve	decisions/0009-compliance-rate-objective-only.md	644	
+preserve	decisions/0010-version-declared-and-fetchable.md	644	
+preserve	decisions/archive/0009-evidence.md	644	
+preserve	decisions/archive/0011-backfill-is-not-compliance-rate.md	644	
+preserve	pitfalls/db/connection-pool-exhausted.md	644	
+preserve	pitfalls/meta/arg-parse-shift-while-iterating.md	644	
+preserve	pitfalls/meta/awk-string-vs-number-compare.md	644	
+preserve	pitfalls/meta/byte-budget-assumes-lf.md	644	
+preserve	pitfalls/meta/cold-zone-link-prefix.md	644	
+preserve	pitfalls/meta/command-substitution-eats-newline.md	644	
+preserve	pitfalls/meta/handwritten-json-nan-placeholder.md	644	
+preserve	pitfalls/meta/install-verifies-wrong-dir.md	644	
+preserve	pitfalls/meta/link-syntax-example-becomes-real-link.md	644	
+preserve	pitfalls/meta/wc-total-line-treated-as-file.md	644	
+preserve	pitfalls/meta/worktree-eol-differs-from-main.md	644	
+preserve	pitfalls/meta/xargs-arg-becomes-filename.md	644	
+preserve	NOW-history/2026-09-30-初始模板.md	644	
+preserve	NOW-history/2026-10-15-度量回顾.md	644	

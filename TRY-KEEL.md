@@ -26,7 +26,7 @@ AI 对源码零编辑、然后宣布完成。
 ## 第1 步 · 装（30 秒）
 
 ```bash
-git clone --depth 1 --branch v3.6.1 https://gitee.com/idcu/keel-starter.git
+git clone --depth 1 --branch v3.7.0 https://gitee.com/idcu/keel-starter.git
 bash keel-starter/install.sh /你的项目根 --with-anchor
 ```
 

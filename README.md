@@ -2,7 +2,7 @@
 
 [![keel-starter CI](https://github.com/idcu/keel-starter/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel-starter/actions/workflows/keel.yml)
 [![keel CI](https://github.com/idcu/keel/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel/actions/workflows/keel.yml)
-[![keel-version](https://img.shields.io/badge/keel--version-3.6.1-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
+[![keel-version](https://img.shields.io/badge/keel--version-3.7.0-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
 
 > 徽章指向 GitHub 镜像（Gitee 无标准徽章端点）。**发布仓**徽章是产品健康度，**项目仓**徽章守的是
 > "设计稿与脚本不许漂移"这条不变量——两者的关系与镜像同步的有序性见设计稿 §12.3。
@@ -50,7 +50,7 @@ bash keel/checks/keel-doctor.sh
 判据自检怎么跑、还有哪些需要你亲手填。**不修复、不改文件**——诊断与修复分开。
 
 已clone 下来了就直接 `bash install.sh <项目根>`；
-**要固定版本**加 `--ref`（`--ref v3.6.1` 或 `--ref=v3.6.1` 都行）——
+**要固定版本**加 `--ref`（`--ref v3.7.0` 或 `--ref=v3.7.0` 都行）——
 指定了版本拉不到就会**报错并列出可用版本**，不会偷偷给你装 `main`。
 项目里已有 `keel/` 时它走**就地升级**（委派给 `keel/checks/keel-upgrade.sh`）：
 内核工具链按版本覆盖、新增结构文件按需补齐，**不覆盖**你的
@@ -118,10 +118,11 @@ bash keel/checks/test-lint.sh --only 6,39-41   # 只跑指定用例（改判据�
 bash keel/checks/install-hooks.sh         # 装钩子（每人 clone 后跑一次，装完自动复核）
 
 # 升级 / 回滚
-bash keel/checks/keel-upgrade.sh --target . --to v3.6.1   # 一条命令升级（前后门禁对比，失败自动回滚）
+bash keel/checks/keel-upgrade.sh --target . --to v3.7.0   # 一条命令升级（前后门禁对比，失败自动回滚）
 bash keel/checks/keel-upgrade.sh --target . --dry-run     # 只打印计划，不动文件
 bash keel/checks/keel-upgrade.sh --target . --rollback    # 回到最近一次升级前（或 --rollback <备份目录>）
-bash keel/checks/test-upgrade.sh          # 升级引擎回归（10 项场景）
+bash keel/checks/test-upgrade.sh          # 升级引擎回归（11 项场景）
+bash keel/checks/keel-upgrade.sh --check-manifest keel    # 发布方/CI：清单与实际文件的哈希/权限/版本
 
 # 按需
 bash keel/checks/verify-hooks.sh          # 钩子"验谎"：本体可执行 + 挂载点正确（CI 加 --allow-unset）
