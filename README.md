@@ -2,7 +2,7 @@
 
 [![keel-starter CI](https://github.com/idcu/keel-starter/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel-starter/actions/workflows/keel.yml)
 [![keel CI](https://github.com/idcu/keel/actions/workflows/keel.yml/badge.svg)](https://github.com/idcu/keel/actions/workflows/keel.yml)
-[![keel-version](https://img.shields.io/badge/keel--version-3.4.13-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
+[![keel-version](https://img.shields.io/badge/keel--version-3.5.0-4B3FE3)](https://github.com/idcu/keel-starter/blob/main/keel/INDEX.md)
 
 > 徽章指向 GitHub 镜像（Gitee 无标准徽章端点）。**发布仓**徽章是产品健康度，**项目仓**徽章守的是
 > "设计稿与脚本不许漂移"这条不变量——两者的关系与镜像同步的有序性见设计稿 §12.3。
@@ -48,7 +48,7 @@ bash keel/checks/keel-doctor.sh
 判据自检怎么跑、还有哪些需要你亲手填。**不修复、不改文件**——诊断与修复分开。
 
 已clone 下来了就直接 `bash install.sh <项目根>`；
-**要固定版本**加 `--ref`（`--ref v3.4.13` 或 `--ref=v3.4.13` 都行）——
+**要固定版本**加 `--ref`（`--ref v3.5.0` 或 `--ref=v3.5.0` 都行）——
 指定了版本拉不到就会**报错并列出可用版本**，不会偷偷给你装 `main`。
 项目里已有 `keel/` 时它走**就地升级**——只补工具链与缺失目录，不覆盖你的
 `INDEX.md` / `NOW.md` / `pitfalls/` / `decisions/`（设计稿 §12.3：升级按字段增量合并）。

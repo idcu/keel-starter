@@ -4,6 +4,44 @@
 升级按该字段增量合并，**不允许"一键覆盖"**（设计稿 §12.3）。
 本仓是发布仓：改动先在此发布，再更新项目仓里的子模块指针。
 
+## 3.5.0 — 2026-11-02
+
+**四件事：域索引沉降、lint locale 泄漏根除、bash3 坑蒸馏进宪法、语义检索接入位从空位变可用基线。**
+
+### 1) 域索引沉降（L1）
+
+- `decisions/INDEX.md` 2965→2510B（余 490B）、`pitfalls/INDEX.md` 2980→2570B
+  （余 430B）：合并 0011/0012 为单行、精简症状列、链接去 `.md` 后缀。
+  **不动 budget.env**（放宽预算属 owner 双审），纯措辞压缩。
+
+### 2) lint 段 3/4 locale 泄漏根除 + LOCALE 自测（L2）
+
+- 段 3 `LC_ALL=C XLIST="$HOTLIST";` 是独立赋值，LC_ALL 泄漏为持久变量，
+  使段 4 的 `*[A-Z]*` 在 UTF-8 locale 下"碰巧正确"——修法：`XLIST="$HOTLIST"; LC_ALL=C xrun awk`
+  （LC_ALL 作命令前缀，临时作用域）；段 4 `*[A-Z]*` → 字母表展开
+  `*[ABCDEFGHIJKLMNOPQRSTUVWXYZ]*`（locale 无关）。
+- `test-lint.py` 新增 `check_locale_isolation`：① UTF-8 locale 下合法基线无"命名含大写"
+  假阳性；② 结构判死 `LC_ALL=C\s+[A-Za-z_]+=` 泄漏赋值（排除注释行）。与 DOC/PROSE 同级。
+- `DESIGN.md` §9.3 同步（逐字一致）。双 bash（3.2/5）+ 双 locale（zh_CN.UTF-8/C）验证。
+
+### 3) bash3 坑蒸馏进 CONSTITUTION rule 7（L3）
+
+- `pitfalls/meta/bash3-utf8-varname-eats-byte.md` 置 `distilled`；
+  CONSTITUTION rule 7 扩为四例，含 bash 3.2 UTF-8 案例与 locale 无关写法
+  （`${VAR}` 定界、字母表、LC_ALL 作命令前缀）。lint 段 11 对 distilled 豁免蒸馏提醒。
+
+### 4) 语义检索接入位参考实现：纯 py3 BM25（L4，ADR 0019）
+
+- 新增 `checks/retrieval/keel-search.py`：纯 python3 标准库、Okapi BM25（k1=1.5, b=0.75）、
+  拉丁按词/CJK 按字、`Retriever` 抽象接口可换 embedding、`--self-test` 3 项排序断言。
+- **不进内核**：不被 keel-lint.sh 引用、不进 §9.1 检查面、不影响 lint 300s 预算。
+- 实测（keel 自身 49 篇）：索引构建 27.9ms；热路径查询中位 2.6–3.7ms、最快 2.0–2.5ms；
+  冷启动 23–55ms；QPS≈322。升级 embedding 三条件见 ADR 0019。
+
+### 门禁
+
+**43/43（42 用例 + 1 元检查）+ DOC + LOCALE + PROSE 全绿** · 两仓 lint 0 fail · lint 3s。
+
 ## 3.4.13 — 2026-11-02
 
 **一件事：commit-msg 钩子在 UTF-8 locale 下静默失效——triggers 计数从未落账。**
