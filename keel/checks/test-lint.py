@@ -164,6 +164,14 @@ keywords: [校验, 规则]
 CASES = []
 
 
+class SkipCase(Exception):
+    """用例在当前环境无法构造判死条件（如 macOS 默认 APFS 大小写不敏感）。
+
+    跳过必须**打印原因**并计入"通过"——否则同一套件在 macOS 上永远红，
+    红久了就没人看（§10.4 推论）。语义与 STDERR_ALLOW 同族：豁免是判据的组成部分。
+    """
+
+
 def case(cid, name, ref, expect, rc=1):
     def deco(fn):
         CASES.append((cid, name, ref, expect, rc, fn))
@@ -433,6 +441,42 @@ def c42(d):
           "# CHANGELOG\n\n## 0.1.0\n\n用户项目自己的变更记录。\n")
 
 
+# ---------------- 跨平台底线（§9.1-18；运行时未实测，只守机器判据） ----------------
+def fs_case_insensitive(d):
+    """探测 d 所在文件系统是否大小写不敏感（macOS 默认 APFS 就是）。"""
+    a = os.path.join(d, ".keel-case-probe-A")
+    b = os.path.join(d, ".keel-case-probe-a")
+    write(a, "x")
+    try:
+        return os.path.exists(b)
+    finally:
+        for p in (a, b):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+
+
+@case("43", "CRLF 换行（Git Bash 检出后脚本报 \\r: command not found）", "§9.1-18", ["含 CRLF"])
+def c43(d):
+    # 判死点：Windows 上 core.autocrlf=true 会把 .sh 检出成 CRLF，`bash 脚本`
+    # 随即在第一行报 `$'\r': command not found`——而 lint 自己就是那个脚本。
+    # 钩子无 .sh 后缀，同样会被 Git 转换，故拿它当样本。
+    app(d, "keel/checks/hooks/pre-commit", "\r\n")
+
+
+@case("44", "文件名仅大小写不同（Windows 不区分大小写会互相覆盖）", "§9.1-18", ["仅大小写不同"])
+def c44(d):
+    # 判死点：macOS/Linux 上两个文件并存完全合法，检出到 Windows 只会剩一个。
+    # 前提是**文件系统本身区分大小写**；macOS 默认 APFS 不区分，两个名字会落到
+    # 同一个 inode，判死条件根本构造不出来——此时显式跳过，Linux/Git Bash 上照跑。
+    if fs_case_insensitive(d):
+        raise SkipCase("文件系统大小写不敏感（macOS 默认 APFS）："
+                       "两个仅大小写不同的文件无法并存，本机跳过；Linux 上照跑")
+    write(os.path.join(d, "keel/archive/demo.md"), "# demo\n")
+    write(os.path.join(d, "keel/archive/Demo.md"), "# Demo\n")
+
+
 # ---------------- 告警（warn，不应导致失败） ----------------
 @case("26", "陈旧告警", "§9.1-12", ["stale"], rc=0)
 def c26(d):
@@ -537,7 +581,9 @@ def check_invoke_forms(base):
 
     历史缺陷：段 9 的路径规范化丢掉前导 `/` 与 `.`，只有 `lint.sh keel` 这一种
     相对入参 0 fail；`$(pwd)/keel` 与文档里写着的 `cd keel && bash checks/keel-lint.sh`
-    会把全部热区文档误报成孤儿。这里用同一条已知干净基线跑三种入参形式。
+    会把全部热区文档误报成孤儿。这里用同一条已知干净基线跑四种入参形式。
+    第四种（v3.8.0）是「路径含空格 + 中文」：Git Bash 与 Windows 用户目录两者都常带，
+    未加引号的展开会把一个路径拆成两个参数——那是只在中文 Windows 上现形的假红/假绿。
     """
     bash = shutil.which("bash") or "bash"
     forms = [
@@ -545,16 +591,22 @@ def check_invoke_forms(base):
         ("绝对", [bash, LINT, os.path.join(base, "keel")], base),
         ("点号", [bash, LINT, "."], os.path.join(base, "keel")),
     ]
+    spaced = base + " 路径 有空格"
+    shutil.copytree(base, spaced)
+    forms.append(("空格+中文", [bash, LINT, "keel"], spaced))
     bad = []
-    for name, cmd, cwd in forms:
-        p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        out = p.stdout.decode("utf-8", "replace")
-        fails = [l for l in out.splitlines() if l.startswith("❌")]
-        if p.returncode != 0 or fails:
-            bad.append("%s: rc=%d %s" % (name, p.returncode, (fails or ["无 ❌"])[0][:70]))
+    try:
+        for name, cmd, cwd in forms:
+            p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            out = p.stdout.decode("utf-8", "replace")
+            fails = [l for l in out.splitlines() if l.startswith("❌")]
+            if p.returncode != 0 or fails:
+                bad.append("%s: rc=%d %s" % (name, p.returncode, (fails or ["无 ❌"])[0][:70]))
+    finally:
+        shutil.rmtree(spaced, ignore_errors=True)
     if bad:
         return False, "调用形式改变判据 → %s" % bad[0]
-    return True, "相对 / 绝对 / '.' 三种入参形式均 0 fail"
+    return True, "相对 / 绝对 / '.' / 空格+中文 四种入参形式均 0 fail"
 
 
 def check_prose_numbers():
@@ -734,7 +786,14 @@ def main():
     for cid, name, ref, expect, want_rc, fn in cases:
         d = os.path.join(root, cid)
         shutil.copytree(base, d)
-        fn(d)
+        try:
+            fn(d)
+        except SkipCase as e:
+            # 跳过计入通过（分母不变），但**必须打印原因**：静默跳过等于没有用例
+            ok += 1
+            print("[SKIP] %s %-42s %s" % (cid, name, ref))
+            print("        %s" % e)
+            continue
         rc, out, err = run_lint(d)
         fails = re.findall(r"❌.*", out)
         warns = re.findall(r"⚠️.*", out)

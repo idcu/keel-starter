@@ -135,5 +135,9 @@ npm run test:coverage      # = vitest run --coverage
 - **已覆盖 GNU/Linux**：Debian 12（glibc 2.36 / coreutils 9.1）、Debian 13（glibc 2.41 /
   coreutils 9.7）、Alpine 3.20（musl / busybox 1.36），三条基线 2026-11-03 全量实测：
   lint 0 fail、lint 自测双 locale 44/44、升级自测 19/19（含断点续跑与回滚）；
-- **未覆盖**：Windows/Git Bash、多采用方；本机 macOS / bash 3.2.57 作为对照基线；
+- **未覆盖（运行时）**：Windows / Git Bash——2026-11-03 探测本机与可用通道，**没有一条能
+  真实执行 bash 的 Windows 运行时**（证据见项目仓 `keel/archive/windows-gitbash-audit-2026-11-03.md`）。
+  已加两条静态守卫（CRLF 换行、文件名仅大小写不同）并各配判死用例，但**静态守卫不等于
+  运行时验证**，不得据此宣称支持 Windows；多采用方同样未覆盖；本机 macOS / bash 3.2.57
+  作为对照基线；
 - 想自己复现：从 [TRY-KEEL.md](TRY-KEEL.md) 开始，三分钟看到你自己项目的真实数字。

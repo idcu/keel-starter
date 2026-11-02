@@ -4,6 +4,26 @@
 升级按该字段增量合并，**不允许"一键覆盖"**（设计稿 §12.3）。
 本仓是发布仓：改动先在此发布，再更新项目仓里的子模块指针。
 
+## 3.8.0 — 2026-11-03
+
+**升级引擎：真实磁盘满/断网下的隐式失败 → 显式失败 + 原子写；lint 增跨平台底线。**
+（采用方可能由绿转红：新增两条 fail 判据 → minor）
+
+- `keel-upgrade.sh`：`pending_write` 的写 temp / rename 任一失败都 `die 2`，并**保留上一版
+  pending**；kernel / additive 的 `cp` 与 merge 的 `sed -i` 失败不再被忽略；所有写入改为
+  temp + `mv` 原子替换——磁盘满时**不会把正在执行的 `keel-upgrade.sh` 截成 0 字节**，
+  也不会把残片哈希记进 pending（`--resume` 因此不会跳过没写完的文件）。
+  manifest 落盘同样改为 temp + mv。
+- `keel-lint.sh` 新增第 15 段「跨平台底线」（§9.1-18，**Windows 运行时未实测**）：
+  ① 脚本 / Markdown / 钩子含 CRLF；② 两个路径仅大小写不同（Windows 不区分大小写）。
+- `test-lint.py`：新增用例 43（CRLF）、44（大小写冲突）；INVOKE 元检查增加第四种入参
+  形式「路径含空格 + 中文」。自测口径 44/44 → **46/46（44 用例 + 2 元检查）**。
+  大小写不敏感文件系统（macOS 默认 APFS）上用例 44 显式 SKIP 并打印原因，
+  在 Linux / 大小写敏感卷上真跑。
+- 新增 `checks/test-faults.py`：真实故障自测（Docker；磁盘满 ×2 + 断网 ×1），
+  无 Docker 或 `KEEL_SKIP_DOCKER=1` 时整体 SKIP 并 exit 0。
+- 两仓 `manifest.tsv` 重算（70 行）。
+
 ## 3.7.4 — 2026-11-03
 
 **修 install.sh 结尾提示里的陈旧自测口径（发布后冒烟实测发现）。**

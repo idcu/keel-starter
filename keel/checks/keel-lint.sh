@@ -833,6 +833,7 @@ for h in pre-commit commit-msg; do
   elif [ ! -x "$hf" ]; then fail_msg "闭环钩子不可执行（需 chmod +x）: checks/hooks/$h"; fi
 done
 
+echo "── 14. 版本副本一致（§9.1-14）"
 # 段 14（v3.4.5）：版本声明的三处副本必须一致。
 #
 # 为什么加这项：ADR 0010 立了"版本声明与可获取必须同时成立"，
@@ -877,6 +878,27 @@ if [ -f "$VER_IDX" ]; then
       ;;
   esac
   unset _v _root _cl _rd _badge _badge_seen
+fi
+
+echo "── 15. 跨平台底线（Windows / Git Bash；§9.1-18，运行时未实测，只守两条机器判据）"
+# 15a CRLF：Git Bash 默认 core.autocrlf=true 会把 .sh 检出成 CRLF，`bash 脚本` 随即
+# 报 `$'\r': command not found`——而 lint 自己就是那个跑不起来的脚本。.gitattributes
+# 只是预防（采用方可能改配置），这里判「检出后已经带 CR」；hooks 无 .sh 后缀，单独纳入。
+_crlf=$(find "$KEEL_DIR" -type f \( -name '*.sh' -o -name '*.py' -o -name '*.md' \
+  -o -path "$KEEL_DIR/checks/hooks/*" \) -exec grep -l $'\r' {} + 2>/dev/null | head -10)
+if [ -n "$_crlf" ]; then
+  while IFS= read -r _f; do
+    [ -n "$_f" ] && fail_msg "文件含 CRLF 换行（Git Bash 检出后脚本报 \\r: command not found）: ${_f#"$KEEL_DIR"/}"
+  done <<< "$_crlf"
+fi
+# 15b 仅大小写不同：Windows 文件系统不区分大小写，两个路径会互相覆盖。仓库在
+# macOS/Linux 上看着正常，到了 Windows 检出成「缺一个、坏一个」——只有判据能拦住。
+_cidup=$(find "$KEEL_DIR" -type f 2>/dev/null | awk '
+  { l = tolower($0); if (l in m) print m[l] "\t" $0; else m[l] = $0 }' | head -10)
+if [ -n "$_cidup" ]; then
+  while IFS=$'\t' read -r _a _b; do
+    [ -n "$_a" ] && fail_msg "文件名仅大小写不同（Windows 会互相覆盖）: ${_a#"$KEEL_DIR"/} ↔ ${_b#"$KEEL_DIR"/}"
+  done <<< "$_cidup"
 fi
 
 # 自报耗时并对照 LINT_SECONDS（ADR 0008）：

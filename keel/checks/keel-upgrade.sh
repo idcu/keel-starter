@@ -367,14 +367,25 @@ fi
 # ---------- 断点状态写入（临时文件 + rename，避免状态文件自身写坏）----------
 pending_write() {   # $1 = 阶段名
   _pt="$PENDING.tmp.$$"
-  {
+  # v3.8.0：写入失败必须显式失败。磁盘满时原实现会「写 temp 失败 → mv 失败」，
+  # 而两次失败都被忽略，调用方以为状态已记下，实际 pending 停在上一版——
+  # 那一刻断点语义已经错了，却没有任何输出。现在任一步失败都 die 2，
+  # 且**上一版 pending 原样保留**（temp 清掉、不 rename），--resume 仍可用。
+  if ! {
     printf '# keel-upgrade pending v1（断点恢复状态，勿手改）\n'
     printf 'from=%s\n' "$CUR"
     printf 'to=%s\n' "$TOV"
     printf 'stage=%s\n' "$1"
     printf 'backup=%s\n' "${BK_DIR:-}"
     [ -z "$DONE_FILES" ] || printf '%s' "$DONE_FILES"
-  } > "$_pt" && mv -f "$_pt" "$PENDING"
+  } > "$_pt"; then
+    rm -f "$_pt"
+    die 2 "断点状态写入失败（磁盘满或只读？）: ${PENDING}；上一版状态保留，腾出空间后 --resume"
+  fi
+  if ! mv -f "$_pt" "$PENDING"; then
+    rm -f "$_pt"
+    die 2 "断点状态替换失败（磁盘满或只读？）: ${PENDING}；上一版状态保留，腾出空间后 --resume"
+  fi
 }
 done_has() { printf '%s' "$DONE_FILES" | awk -F'\t' -v p="$1" '$1=="file" && $2==p {f=1} END{exit(f?0:1)}'; }
 record_file() {     # $1 = 相对路径：记录落盘后的真实字节哈希与权限
@@ -458,7 +469,7 @@ if [ "$DRY" -eq 0 ]; then
     mkdir -p "$TARGET/.keel-backup"
     BK_DIR="$TARGET/.keel-backup/$(printf '%s' "$CUR" | tr '/ ' '__')-to-$(printf '%s' "$TOV" | tr '/ ' '__')-$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$BK_DIR"
-    cp -pR "$TARGET/keel" "$BK_DIR/keel" || die 2 "备份失败: $BK_DIR"
+    cp -pR "$TARGET/keel" "$BK_DIR/keel" || die 2 "备份失败: $BK_DIR（磁盘满或只读？）"
     mkdir -p "$BK_DIR/local-mod"
     pending_write backup
     echo "── 2. 备份：${BK_DIR}（可用 --rollback 回滚）"
@@ -467,6 +478,8 @@ if [ "$DRY" -eq 0 ]; then
 fi
 
 echo "── 3. 按 manifest 分类处理"
+# temp+mv 的中间态可能被 SIGKILL 留在树里（不在清单、也不该被 lint 看见），先清掉
+find "$TARGET/keel" -name '*.keel-new.*' -type f -exec rm -f {} + 2>/dev/null || true
 UPDATED=0; ADDED=0; KEPT=0; SKIPPED=0; MODIFIED=""
 while IFS=$'\t' read -r cat rel mode hash; do
   case "$cat" in ''|\#*) continue ;; esac
@@ -490,7 +503,22 @@ while IFS=$'\t' read -r cat rel mode hash; do
       if [ "$DRY" -eq 1 ]; then
         echo "   ↑ 覆盖 $rel"
       else
-        mkdir -p "$(dirname "$dstf")"; cp "$srcf" "$dstf"
+        # v3.8.0：写入失败必须显式失败，且**先写临时文件再 rename**。
+        # ① `cp` 的退出码原实现没人看，磁盘满会留下截断文件、并把残片哈希记进 pending；
+        # ② 直接覆盖 `keel-upgrade.sh` 本身时，正在执行的 bash 可能读到被截断的脚本
+        #    （实测 tmpfs 写满后该文件变成 0 字节，进程仍打印"升级完成"）。
+        # temp + mv 后：执行中的旧 inode 不被截断，失败也只留下可清理的临时文件。
+        mkdir -p "$(dirname "$dstf")" \
+          || die 2 "创建目录失败: $(dirname "$rel")（磁盘满或只读？）"
+        _tmpf="${dstf}.keel-new.$$"
+        if ! cp "$srcf" "$_tmpf"; then
+          rm -f "$_tmpf"
+          die 2 "写入失败: ${rel}（磁盘满或只读？已完成 ${DONE_N} 个文件；修复后 --resume 或 --rollback）"
+        fi
+        if ! mv -f "$_tmpf" "$dstf"; then
+          rm -f "$_tmpf"
+          die 2 "写入失败: ${rel}（rename 失败，磁盘满或只读？已完成 ${DONE_N} 个文件）"
+        fi
         [ -n "$mode" ] && chmod "$mode" "$dstf" 2>/dev/null
         record_file "$rel"; pending_write applying
         fault_point "after:file:${DONE_N}"
@@ -505,7 +533,12 @@ while IFS=$'\t' read -r cat rel mode hash; do
           if [ "$DRY" -eq 1 ]; then
             echo "   ~ 改 $rel 的 keel-version 行 → ${TOV}（其余保留）"
           else
-            sed -i.bak "s|^keel-version:.*|keel-version: $TOV|" "$idx" && rm -f "$idx.bak"
+            # v3.8.0：同 kernel 分支——sed 写失败（磁盘满）不得静默。
+            if ! sed -i.bak "s|^keel-version:.*|keel-version: $TOV|" "$idx"; then
+              rm -f "$idx.bak"
+              die 2 "写入失败: ${rel}（磁盘满或只读？已完成 ${DONE_N} 个文件；修复后 --resume 或 --rollback）"
+            fi
+            rm -f "$idx.bak"
             record_file "$rel"; pending_write applying
             fault_point "after:file:${DONE_N}"
           fi
@@ -529,7 +562,17 @@ while IFS=$'\t' read -r cat rel mode hash; do
         KEPT=$((KEPT + 1))
       elif [ -d "$(dirname "$dstf")" ]; then
         if [ "$DRY" -eq 1 ]; then echo "   + 补上 ${rel}（新增文件）"; else
-          mkdir -p "$(dirname "$dstf")"; cp "$srcf" "$dstf"
+          mkdir -p "$(dirname "$dstf")" \
+            || die 2 "创建目录失败: $(dirname "$rel")（磁盘满或只读？）"
+          _tmpf="${dstf}.keel-new.$$"
+          if ! cp "$srcf" "$_tmpf"; then
+            rm -f "$_tmpf"
+            die 2 "写入失败: ${rel}（磁盘满或只读？已完成 ${DONE_N} 个文件；修复后 --resume 或 --rollback）"
+          fi
+          if ! mv -f "$_tmpf" "$dstf"; then
+            rm -f "$_tmpf"
+            die 2 "写入失败: ${rel}（rename 失败，磁盘满或只读？已完成 ${DONE_N} 个文件）"
+          fi
           record_file "$rel"; pending_write applying
           fault_point "after:file:${DONE_N}"
         fi
@@ -551,7 +594,12 @@ if [ "$DRY" -eq 1 ]; then
 fi
 
 # manifest 本身最后落盘（它是安装状态记录，不参与自哈希）
-cp "$SRC_KEEL/checks/manifest.tsv" "$TARGET/keel/checks/manifest.tsv"
+if ! cp "$SRC_KEEL/checks/manifest.tsv" "$TARGET/keel/checks/manifest.tsv.keel-new.$$"; then
+  rm -f "$TARGET/keel/checks/manifest.tsv.keel-new.$$"
+  die 2 "写入 manifest 失败（磁盘满或只读？）；已完成 ${DONE_N} 个文件，修复后 --resume"
+fi
+mv -f "$TARGET/keel/checks/manifest.tsv.keel-new.$$" "$TARGET/keel/checks/manifest.tsv" \
+  || die 2 "替换 manifest 失败（磁盘满或只读？）；已完成 ${DONE_N} 个文件，修复后 --resume"
 record_file "checks/manifest.tsv"
 pending_write gate
 
@@ -591,6 +639,7 @@ cp -pR "$BK_DIR/keel" "$TARGET/keel"
 echo "已回滚到 v${CUR}（备份: ${BK_DIR}）"
 EOF
 chmod +x "$BK_DIR/restore.sh"
+[ -f "$BK_DIR/restore.sh" ] || echo "⚠️  未能写入 ${BK_DIR}/restore.sh（空间不足？）；回滚请用 --rollback"
 
 echo "──"
 echo "✅ 升级完成：$CUR → ${TOV}（内核覆盖 $UPDATED · 新增 $ADDED · 保留 ${KEPT}$([ "$SKIPPED" -gt 0 ] && echo " · 续跑跳过 ${SKIPPED}")）"
