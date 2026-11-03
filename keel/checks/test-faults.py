@@ -20,8 +20,14 @@
 `cp` / `sed` 失败而退出码没人看，会留下截断文件并把**残片哈希**记进 pending——
 断点恢复会跳过真正没写完的文件，这类坏法用 SIGKILL 永远模拟不出来。
 
-依赖：Docker（linux 容器）+ 本机 python3。没有 Docker 或设 KEEL_SKIP_DOCKER=1
-时**跳过并 exit 0**（本地不出假红；CI 按同一规则跳过，需要真跑就装 Docker）。
+三种环境必须区分（禁止把「跑不了」包装成「通过」）：
+    ① Docker 可用 + linux daemon      → 跑 7 例，输出 PASS / FAIL
+    ② 无 docker 二进制（PATH 遮蔽）   → SKIP(no-binary)，汇总「0 通过 / 0 失败 / N 跳过（未验证）」
+    ③ 二进制在但 daemon 不可用        → SKIP(no-daemon)，同样单列未验证
+默认策略：跳过并计入未验证，`exit 0`（CI 不因环境缺 Docker 变红——红得没有信息量
+会被习惯性忽略）；门禁若要求真跑故障注入，设 `KEEL_FAULTS_REQUIRE_DOCKER=1` → `exit 1`。
+另有 6 条判死自检（不需要 Docker）验证「无断言输出 / 有 FAIL / 门禁非零」不会被算成
+PASS，以及上面的跳过策略不会退化成「全部通过」。
 """
 
 import os
@@ -68,18 +74,56 @@ def version_of(path):
     return ""
 
 
-def docker_ok():
+def probe_env():
+    """探测运行环境并分类。返回 (status, reason)。
+
+    status：ok / disabled / no-binary / no-daemon / non-linux。
+    分开命名是为了让汇总能说清「为什么没跑」——只写一句「没有 Docker」
+    无法区分未安装与 daemon 挂掉，两种环境的修复方式完全不同。
+    """
     if os.environ.get("KEEL_SKIP_DOCKER"):
-        return False, "KEEL_SKIP_DOCKER=1"
+        return "disabled", "KEEL_SKIP_DOCKER=1（显式跳过）"
     if not shutil.which("docker"):
-        return False, "本机没有 docker"
+        return "no-binary", "PATH 上找不到 docker 二进制（未安装或被遮蔽）"
     p = subprocess.run(["docker", "info", "--format", "{{.OSType}}"],
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if p.returncode != 0:
-        return False, "docker daemon 不可用"
-    if p.stdout.decode().strip() != "linux":
-        return False, "Docker OSType=%s（需要 linux 容器）" % p.stdout.decode().strip()
-    return True, "ok"
+        return "no-daemon", "docker 二进制在，但 daemon 不可用（docker info rc=%d）" % p.returncode
+    ostype = p.stdout.decode().strip()
+    if ostype != "linux":
+        return "non-linux", "Docker OSType=%s（需要 linux 容器）" % ostype
+    return "ok", "ok"
+
+
+REQUIRE_ENV = "KEEL_FAULTS_REQUIRE_DOCKER"
+
+
+def summary_line(label, passed, failed, skipped):
+    """统一汇总措辞：有跳过时**绝不**输出「通过」这个无条件的词。"""
+    if failed:
+        head = "❌ %s失败" % label
+    elif skipped:
+        head = "⚠️ %s未全部验证" % label
+    else:
+        head = "✅ %s通过" % label
+    return "%s：%d 通过 / %d 失败 / %d 跳过（未验证）" % (head, passed, failed, skipped)
+
+
+def missing_env_result(status, why, require=None):
+    """无可用 Docker 时的输出与退出码（可被判死自检直接调用）。"""
+    if require is None:
+        require = os.environ.get(REQUIRE_ENV) == "1"
+    lines = [
+        "SKIP：%s" % why,
+        "      环境分类：%s" % status,
+        "      受影响：%d 例真实故障注入全部未验证（不是 PASS）" % len(CASES),
+        summary_line("真实故障自测", 0, 0, len(CASES)),
+        "策略：默认「跳过并计入未验证」（exit 0），CI 不因缺 Docker 变红；",
+        "      门禁要求真跑故障注入时设 %s=1 → exit 1。" % REQUIRE_ENV,
+    ]
+    if require:
+        lines.append("严格模式：%s=1 已开启 → exit 1（本环境不满足门禁）" % REQUIRE_ENV)
+    return lines, (1 if require else 0)
 
 
 def run_container(script, target, tmpfs=None, network=None, timeout=600,
@@ -478,15 +522,83 @@ def summarize(out):
     return True, ""
 
 
+SELFCASES = []
+
+
+def selfcase(name):
+    def deco(fn):
+        SELFCASES.append((name, fn))
+        return fn
+    return deco
+
+
+@selfcase("无断言输出不得算 PASS（伪装 PASS 必须被抓）")
+def s_no_marker():
+    ok, msg = summarize("全部做完了\n")
+    assert not ok, "没有 PASS: 断言却被算成通过"
+    assert "未产生断言输出" in msg
+
+
+@selfcase("容器内有 FAIL 行不得算 PASS")
+def s_fail_line():
+    ok, msg = summarize("PASS: a\nFAIL: b\n")
+    assert not ok and msg.startswith("FAIL:"), "FAIL 行未被判死"
+
+
+@selfcase("续跑后 LINT≠0 不得算 PASS")
+def s_lint_bad():
+    ok, msg = summarize("PASS: a\nLINT=1\n")
+    assert not ok and "keel-lint" in msg, "LINT≠0 未被判死"
+
+
+@selfcase("正常输出才允许算 PASS")
+def s_good():
+    ok, _ = summarize("PASS: a\nLINT=0\n")
+    assert ok, "正常输出被误判"
+
+
+@selfcase("默认策略：缺 Docker → SKIP 计未验证、exit 0、不写「全部通过」")
+def s_policy_default():
+    lines, rc = missing_env_result("no-bin" + "ary", "测试用原因", require=False)
+    text = "\n".join(lines)
+    assert rc == 0, "默认策略不应变红"
+    assert "跳过（未验证）" in text and "全部通过" not in text, "跳过的汇总措辞不诚实"
+    assert "0 通过 / 0 失败 / %d 跳过" % len(CASES) in text
+
+
+@selfcase("严格模式：KEEL_FAULTS_REQUIRE_DOCKER=1 → exit 1")
+def s_policy_strict():
+    _, rc = missing_env_result("no-daemon", "测试用原因", require=True)
+    assert rc == 1, "严格模式未变红"
+
+
+def run_selftests():
+    """判死自检不需要 Docker：先证明「汇总器不会被骗」，再看环境能不能真跑。"""
+    print("判死自检（不需要 Docker）")
+    bad = 0
+    for name, fn in SELFCASES:
+        try:
+            fn()
+            print("[PASS] 自检：%s" % name)
+        except AssertionError as e:
+            bad += 1
+            print("[FAIL] 自检：%s\n        %s" % (name, e))
+    print("   %s：%d/%d" % ("✅ 判死自检通过" if not bad else "❌ 判死自检失败",
+                           len(SELFCASES) - bad, len(SELFCASES)))
+    return bad
+
+
 def main():
-    ok, why = docker_ok()
-    if not ok:
-        print("SKIP：%s —— 真实故障用例需要 Docker linux 容器。" % why)
-        print("      跳过条件：无 docker / docker daemon 不可用 / OSType≠linux / KEEL_SKIP_DOCKER=1；")
-        print("      CI 上同一条规则生效，不会因缺 Docker 变红。")
-        return 0
     print("keel-upgrade 真实故障自测 · 镜像 %s · 模板 %s" % (IMAGE, TEMPLATE_REL))
     print("=" * 76)
+    self_bad = run_selftests()
+    print("=" * 76)
+    status, why = probe_env()
+    if status != "ok":
+        lines, rc = missing_env_result(status, why)
+        for line in lines:
+            print(line)
+        return 1 if (self_bad or rc) else 0
     failed = skipped = 0
     for name, fn in CASES:
         rc, out = fn()
@@ -504,12 +616,10 @@ def main():
             for line in out.splitlines()[-10:]:
                 print("    | " + line)
     print("=" * 76)
-    print("%s：%d 通过 / %d 失败 / %d 跳过（未验证）"
-          % ("✅ 真实故障自测通过" if not failed else "❌ 真实故障自测失败",
-             len(CASES) - failed - skipped, failed, skipped))
+    print(summary_line("真实故障自测", len(CASES) - failed - skipped, failed, skipped))
     if skipped:
         print("   ⚠️ 未验证的用例不计入 PASS（原因见上方 SKIP 行；补足能力后重跑才算验证）")
-    return 1 if failed else 0
+    return 1 if (failed or self_bad) else 0
 
 
 if __name__ == "__main__":
