@@ -901,6 +901,59 @@ if [ -n "$_cidup" ]; then
   done <<< "$_cidup"
 fi
 
+echo "── 16. 写路径收敛（§9.1-19：升级脚本不得有未受控的直写）"
+# 为什么要有它：v3.8.0 修的是"每一处漏判"，但漏判的成因是**写动作分散**——
+# 退化成"写失败却报成功"。段 16 是**静态判据**：升级脚本里除 atomic_write 本体
+# 与整目录备份/回滚外，不许出现任何直接写文件的动作。三类合法直写予以豁免：
+#   ① `# >>> keel-write-core` 区间（atomic_write 本体，唯一允许碰目标文件的地方）；
+#   ② 行尾标 `# keel-write:ok` 的整目录 cp（备份 / 回滚 / 本地改动留档）；
+#   ③ heredoc 体（restore.sh 与 pending 的内容是**数据**，不是脚本在直写）。
+_up="$KEEL_DIR/checks/keel-upgrade.sh"
+if [ -f "$_up" ]; then
+  _wraw=$(awk '
+    /^# >>> keel-write-core/ { core = 1; next }
+    /^# <<< keel-write-core/ { core = 0; next }
+    core { next }
+    /# keel-write:ok/ { next }
+    /<<[-]?[^[:space:];]*EOF/ { hd = 1; next }
+    hd { if ($0 ~ /^EOF[[:space:]]*$/) hd = 0; next }
+    /^[[:space:]]*#/ { next }
+    {
+      s = $0
+      sub(/^[[:space:]]+/, "", s)
+      if (s ~ /(^|[&|;(]|then|else|do)[[:space:]]*sed[[:space:]]+-i/) { print NR "\tsed-i\t" $0; next }
+      if (s ~ /(^|[&|;(]|then|else|do)[[:space:]]*(cp|mv|install)[[:space:]]/) { print NR "\tcp\t" $0; next }
+      if (s ~ />[[:space:]]*"?\$(TARGET|\{TARGET\})/) print NR "\tredir\t" $0
+    }
+  ' "$_up")
+  while IFS=$'\t' read -r _wn _wk _wt; do
+    [ -n "$_wn" ] || continue
+    case "$_wk" in
+      sed-i) fail_msg "未受控的直写：sed -i（应 pipe 给 atomic_write）: checks/keel-upgrade.sh:${_wn}" ;;
+      cp) fail_msg "未受控的直写：裸 cp/mv/install（应走 atomic_write，或标 # keel-write:ok）: checks/keel-upgrade.sh:${_wn}" ;;
+      redir)
+        case "$_wt" in
+          *'.keel-backup'*|*'.keel-new.'*|*.log*) ;;
+          *) fail_msg "重定向写目标文件（应走 atomic_write）: checks/keel-upgrade.sh:${_wn}" ;;
+        esac ;;
+    esac
+  done <<< "$_wraw"
+  # 成功信息的位置：唯一允许的「✅ 升级完成」必须出现在 final_verify 之后 8 行内。
+  # 这一条把"声明成功"与"复核通过"绑死，避免某次重构把打印挪到校验之前。
+  _wok=$(awk '/✅ 升级完成/ && !/^[[:space:]]*#/ { print NR; exit }' "$_up")
+  if [ -z "$_wok" ]; then
+    fail_msg "升级脚本缺唯一成功信息行「✅ 升级完成」（§9.1-19）"
+  else
+    _wfrom=$((_wok - 8)); [ "$_wfrom" -lt 1 ] && _wfrom=1
+    if ! awk -v a="$_wfrom" -v b="$((_wok - 1))" 'NR >= a && NR <= b && /final_verify/' "$_up" | grep -q .; then
+      fail_msg "成功信息早于终态校验（final_verify 应在「升级完成」前 8 行内）: checks/keel-upgrade.sh:${_wok}"
+    fi
+  fi
+else
+  warn_msg "缺 checks/keel-upgrade.sh（未接入升级引擎的仓库跳过段 16）"
+fi
+unset _up _wraw _wn _wk _wt _wok _wfrom
+
 # 自报耗时并对照 LINT_SECONDS（ADR 0008）：
 # **只告警不 fail**——机器慢不等于文件错。把性能当 fail 会让人在慢机器上
 # 开始绕过 lint，那是比慢更坏的结果（§9.4 同类教训：制造大规模假告警）。

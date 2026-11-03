@@ -477,6 +477,34 @@ def c44(d):
     write(os.path.join(d, "keel/archive/Demo.md"), "# Demo\n")
 
 
+def _upgrade_fixture(d, body):
+    """造一个"只为段 16 服务"的升级脚本：故意违规的写法 + 合法的收尾。"""
+    write(os.path.join(d, "keel/checks/keel-upgrade.sh"),
+          "#!/usr/bin/env bash\nset -uo pipefail\n" + body)
+
+
+@case("45", "裸 cp 写目标文件（应走 atomic_write）", "§9.1-19", ["裸 cp/mv/install"])
+def c45(d):
+    _upgrade_fixture(d, "cp \"$SRC/x\" \"$TARGET/keel/x\"\nfinal_verify\necho \"✅ 升级完成\"\n")
+
+
+@case("46", "直接 sed -i 改目标文件（应 pipe 给 atomic_write）", "§9.1-19", ["sed -i"])
+def c46(d):
+    _upgrade_fixture(d, "sed -i 's|^keel-version:.*|keel-version: 9|' \"$TARGET/keel/INDEX.md\"\n"
+                         "final_verify\necho \"✅ 升级完成\"\n")
+
+
+@case("47", "重定向写目标文件（`>` 也不许直写）", "§9.1-19", ["重定向写目标文件"])
+def c47(d):
+    _upgrade_fixture(d, "printf 'x\\n' > \"$TARGET/keel/checks/x\"\n"
+                         "final_verify\necho \"✅ 升级完成\"\n")
+
+
+@case("48", "成功信息早于终态校验（先声明成功、后复核）", "§9.1-19", ["成功信息早于终态校验"])
+def c48(d):
+    _upgrade_fixture(d, "echo \"✅ 升级完成\"\nfinal_verify\n")
+
+
 # ---------------- 告警（warn，不应导致失败） ----------------
 @case("26", "陈旧告警", "§9.1-12", ["stale"], rc=0)
 def c26(d):

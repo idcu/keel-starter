@@ -1,11 +1,11 @@
-# keel-manifest v1 version=3.8.0 generated=2026-11-03
+# keel-manifest v1 version=3.9.0 generated=2026-11-03
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455
-kernel	checks/keel-lint.sh	755	3dfb5df37d7eb8ef7262f7858aa3c40fbbe95fce6b22c4546fa2b948cee001e3
+kernel	checks/keel-lint.sh	755	c828152e6c66f2ddc93e4f2cd16fa59424657a05295fc4b4b04dc10d0d3767e3
 kernel	checks/test-lint.sh	755	93f5861d880a7dc4ba225527e708e0c26f869e832e1eaa8cb36e933b14a7f4d3
-kernel	checks/test-lint.py	644	67ee44dc080064b3c6aaf1b3d056ba459dd921c7d7d4f0a6343a86803db9e901
-kernel	checks/keel-upgrade.sh	755	28f58a19e2ca3e5a72f641401d1bd6bbbcfc5d6d629f17e0ff9fec27ad64a284
+kernel	checks/test-lint.py	644	4d1ef6c5db52d31efd20b0597a54a592bd6b545eae2d78c27914802a887959dc
+kernel	checks/keel-upgrade.sh	755	5699310a1301c93c5bd6d2f1f4da72722d6cb645c568968df00e1851bcdebbbe
 kernel	checks/compliance.sh	755	59c40b3729a6abfe93ab16bf180c961a943ae3f3337075100eac7e09bfd05d09
 kernel	checks/load-estimate.sh	755	c73b2c5fec37ac3c92e77b6016b644828f986609929f3c6368d530f43d3a0e48
 kernel	checks/keel-lite.sh	755	e41f5e113c2dedf5f6da1e2324de8d8e24af898b22601768d9a3aeb5e86d80ae
@@ -70,4 +70,4 @@ preserve	pitfalls/meta/worktree-eol-differs-from-main.md	644
 preserve	pitfalls/meta/xargs-arg-becomes-filename.md	644	
 preserve	NOW-history/2026-09-30-初始模板.md	644	
 preserve	NOW-history/2026-10-15-度量回顾.md	644	
-kernel	checks/test-faults.py	644	a024c2f2865361d61f4a929d3d7081fd5c643a52ce1fcc2fa482fac76aa23415
+kernel	checks/test-faults.py	644	da1eebf853185d58cd30873cbf1f02052e0c0afb381f72e02e1747d9a3b7e793
