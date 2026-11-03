@@ -6,7 +6,9 @@
 #   bash install.sh <项目根> --ref v3.2.0  # 指定版本
 #   bash install.sh <项目根> --with-anchor # 顺手把点火锚点写进 AGENTS.md（默认不写）
 #
-# 退出码: 0 = 装好且 lint 通过；1 = lint 未通过；2 = 用法/环境错误
+# 退出码: 0 = 装好且 lint 通过；1 = lint 未通过；2 = 用法/环境/模板校验错误
+#         3 = 升级后门禁失败已自动回滚；4 = 升级后门禁失败未回滚；5 = 存在未完成的升级
+#         （3–5 来自就地升级的目标版本引擎，原样返回）
 #
 # ── 为什么 --with-anchor 默认关闭（v3.3.8）─────────────────────────
 # 装完还差三步，第 1 步"贴锚点"是最大的流失点：不贴，lint 当场判死、
@@ -21,7 +23,7 @@
 #   本项目零编译、零运行时，引入 node 依赖树换可发现性不划算。
 set -uo pipefail
 
-REPO="https://gitee.com/idcu/keel-starter.git"
+REPO="${KEEL_INSTALL_REPO:-https://gitee.com/idcu/keel-starter.git}"
 REF="main"
 TARGET=""
 
@@ -94,7 +96,31 @@ if [ "$EXISTING" -eq 1 ]; then
     echo "   要么去掉 --ref 跟随最新版，要么手工同步工具链后重试"
     exit 2
   fi
-  bash "$UP" --target "$TARGET" --from "$tmp/starter" || exit $?
+  # 两阶段引导（v3.10.0）：本脚本只负责「取模板 + 校验」，实际升级由**目标版本**的
+  # 引擎执行——旧版（≤3.5.0，没有引擎）走的也是这条路，不会各自为政。
+  TOV=$(sed -n 's/^keel-version:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$tmp/starter/keel/INDEX.md" | head -1)
+  [ -n "$TOV" ] || { echo "❌ 模板缺 keel-version，拒绝升级（目标未改动）"; exit 2; }
+  if ! bash "$UP" --check-manifest "$tmp/starter/keel" > "$tmp/manifest.log" 2>&1; then
+    echo "❌ 模板自检未通过（版本 / manifest / sha256 / 权限），拒绝升级（目标未改动）"
+    tail -6 "$tmp/manifest.log" | sed 's/^/   /'
+    exit 2
+  fi
+  BOOT="$TARGET/.keel-bootstrap.pending"
+  if [ -f "$BOOT" ]; then
+    echo "   ℹ️  清理上次未完成的引导标记"
+    rm -f "$BOOT"
+  fi
+  CURV=$(sed -n 's/^keel-version:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$TARGET/keel/INDEX.md" | head -1)
+  printf '# keel-bootstrap pending v1（引导交接：install.sh 只搬运，判据交给目标版本引擎）\nfrom=%s\nto=%s\nstage=install-handoff\n' \
+    "${CURV:-unknown}" "$TOV" > "$BOOT.tmp.$$" && mv -f "$BOOT.tmp.$$" "$BOOT" \
+    || { echo "❌ 无法写引导交接状态（磁盘满或只读？目标未改动）"; rm -f "$BOOT.tmp.$$"; exit 2; }
+  bash "$UP" --target "$TARGET" --from "$tmp/starter"
+  rc=$?
+  rm -f "$BOOT"
+  if [ "$rc" -ne 0 ]; then
+    echo "   ↪ 引导未完成（rc=${rc}）；目标状态以升级断点为准：--resume / --rollback"
+    exit "$rc"
+  fi
 else
   cp -pR "$tmp/starter/keel" "$TARGET/keel" && echo "   + 已复制 keel/（含 checks / hooks / 模板）"
 fi

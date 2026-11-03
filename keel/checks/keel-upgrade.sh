@@ -13,10 +13,16 @@
 # 退出码:
 #   0 = 升级完成 / 已是目标版本（无需升级）/ 回滚完成 / manifest 一致
 #   1 = 升级前门禁未通过（未改动任何文件）/ manifest 与实际文件不一致
-#   2 = 用法 / 环境 / 模板校验错误
+#   2 = 用法 / 环境 / 模板校验错误 / 引导交接前校验失败（目标未改动）
 #   3 = 升级后门禁失败，已自动回滚
 #   4 = 升级后门禁失败，未回滚（--no-rollback）
 #   5 = 存在未完成的升级（需 --resume 或 --rollback）/ 续跑前一致性校验失败
+#
+# 两阶段引导（v3.10.0）：升级的**判据属于目标版本**。本脚本先只做「取模板 + 校验
+# （版本 / manifest / sha256）」，发现自己与模板引擎字节不同时，就以子进程方式把
+# 同一份模板交给目标版本的引擎执行实际升级；旧引擎只搬运、不参与判据。
+# 交接状态写在 <项目根>/.keel-bootstrap.pending（from/to/stage=handoff）；
+# 交接前的任何校验失败都不会改动目标文件，子进程退出码原样返回（0–5 同上）。
 #
 # 断点恢复（v3.7.1）：apply 期间在 <项目根>/.keel-upgrade.pending 记录目标版本、
 # 阶段（preflight/backup/applying/gate/done）、已完成文件与各自 sha256、备份目录、
@@ -51,7 +57,7 @@ TARGET=""; TO=""; FROM=""; DRY=0; FORCE=0; NO_ROLLBACK=0; SKIP_TL=0
 REGEN=""; CHECK=""; RB=""; RB_SET=0; RESUME=0
 
 usage() {
-  sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 die() { echo "❌ $2"; exit "$1"; }
@@ -129,6 +135,52 @@ ver_gt() {
   done
   return 1
 }
+
+# ---------- 单一写路径（v3.9.0 / §9.1-19）----------
+# 为什么要有它：v3.8.0 修的是"每一处漏判"，但漏判的成因是**写动作分散**——
+# kernel / additive / merge / manifest / pending / restore.sh 各自一套 cp、sed、
+# printf 重定向，退出码逐个判断，漏一个就回到"静默成功"。这里收敛成一个函数：
+# 内容从 stdin 读入 → 写临时文件 → 持久化 → 读回校验 → rename → 权限。
+# 任一步失败即 die 2，且**目标文件保持原样**（临时文件清掉、不 rename）。
+# 之后 record_file 用 AW_HASH 复核落盘内容，等于"写完再读回哈希"。
+#
+# 定义放在最前面（v3.10.0）：两阶段引导写交接标记时它必须已经可用；否则引导
+# 只能另起一套写路径，正好是这条判据要消灭的东西。
+#
+# $1=目标绝对路径 $2=权限(可空) $3=报错标签 $4=期望 sha256(可空)
+# >>> keel-write-core（lint §9.1-19 豁免区间：唯一允许直接写文件的地方）
+atomic_write() {
+  _aw_dst="$1"; _aw_mode="${2:-}"; _aw_what="${3:-$1}"; _aw_want="${4:-}"
+  _aw_dir=$(dirname "$_aw_dst")
+  mkdir -p "$_aw_dir" 2>/dev/null \
+    || die 2 "创建目录失败: ${_aw_what}（磁盘满或只读？）"
+  _aw_tmp="${_aw_dst}.keel-new.$$"
+  if ! cat > "$_aw_tmp" 2>/dev/null; then
+    rm -f "$_aw_tmp"
+    die 2 "写入失败: ${_aw_what}（磁盘满或只读？已完成 ${DONE_N:-0} 个文件；修复后 --resume 或 --rollback）"
+  fi
+  # 持久化：GNU sync 支持按文件；BSD sync 不接受参数（会直接报错），此时跳过。
+  # rename 的**可见性**不受影响，这里只是把"已经在页缓存里"落到介质。
+  if sync --version >/dev/null 2>&1; then sync "$_aw_tmp" 2>/dev/null || true; fi
+  AW_HASH=$(sha256_of "$_aw_tmp")
+  if [ "$AW_HASH" = "__NO_SHA256__" ] || [ ! -s "$_aw_tmp" ]; then
+    rm -f "$_aw_tmp"
+    die 2 "写入后校验失败（空文件或算不出哈希）: ${_aw_what}；修复后 --resume 或 --rollback"
+  fi
+  if [ -n "$_aw_want" ] && [ "$AW_HASH" != "$_aw_want" ]; then
+    rm -f "$_aw_tmp"
+    die 2 "写入后校验失败（哈希不符）: ${_aw_what}（期望 ${_aw_want}，实际 ${AW_HASH}）"
+  fi
+  if ! mv -f "$_aw_tmp" "$_aw_dst" 2>/dev/null; then
+    rm -f "$_aw_tmp"
+    die 2 "写入失败: ${_aw_what}（rename 失败，磁盘满或只读？已完成 ${DONE_N:-0} 个文件）"
+  fi
+  [ -n "$_aw_mode" ] && chmod "$_aw_mode" "$_aw_dst" 2>/dev/null
+  return 0
+}
+# <<< keel-write-core
+
+DONE_FILES=""; DONE_N=0
 
 # ---------- --regen-manifest（发布方：改过内核文件后重算校验和）----------
 if [ -n "$REGEN" ]; then
@@ -258,6 +310,8 @@ CUR=$(read_version "$TARGET/keel/INDEX.md")
 OLD_MANIFEST="$TARGET/keel/checks/manifest.tsv"
 [ -f "$OLD_MANIFEST" ] || OLD_MANIFEST=""
 PENDING="$TARGET/.keel-upgrade.pending"
+TGT_LOG=$(mktemp -d 2>/dev/null) || TGT_LOG="$TARGET/.keel-backup/tmp-logs"
+mkdir -p "$TGT_LOG" 2>/dev/null || true
 
 # ---------- 取模板 ----------
 tmp=""
@@ -289,6 +343,69 @@ TOV=$(read_version "$SRC_KEEL/INDEX.md")
   echo "⚠️  --to=$TO 但模板实际版本是 ${TOV}（以模板为准）"
 
 echo "keel-upgrade · 目标=$TARGET · $CUR → $TOV · 模式=$([ "$DRY" -eq 1 ] && echo dry-run || echo apply)"
+
+# ---------- 两阶段引导（v3.10.0 / §12.3）----------
+# 为什么：升级的**判据属于目标版本**。若让起点版本的引擎一路做到底，新判据
+# （终态校验、写路径约束）永远轮不到旧仓库——v3.9.0 的误判 bug 就死在这里：
+# 旧引擎建的备份没有 restore.sh，而新判据却假定它一定有。
+# 做法：本脚本只负责「取模板 + 校验（版本 / manifest / sha256）」，发现自己的引擎
+# 与模板引擎不同，就把同一份模板交给目标版本的引擎执行；自己只搬运、不判据。
+BOOT_PENDING="$TARGET/.keel-bootstrap.pending"
+
+# 上次引导若被强杀，交接标记会留下。两种残留都无需用户操作：
+#   有升级断点 → 实际升级已开始，状态归升级引擎（下面按 pending 提示续跑/回滚）；
+#   无升级断点 → 交接在写任何目标文件之前就断了，目标一个字节都没动。
+if [ -f "$BOOT_PENDING" ]; then
+  if [ "${KEEL_UPGRADE_BOOTSTRAPPED:-0}" != "1" ]; then
+    echo "ℹ️  清理上次未完成的引导标记：${BOOT_PENDING}（目标状态以下面的升级断点为准）"
+  fi
+  rm -f "$BOOT_PENDING"
+fi
+
+if [ "${KEEL_UPGRADE_BOOTSTRAPPED:-0}" != "1" ] && [ -f "$SRC_KEEL/checks/keel-upgrade.sh" ]; then
+  _bh_sha=$(sha256_of "$SRC_KEEL/checks/keel-upgrade.sh")
+  if [ "$_bh_sha" != "$(sha256_of "$HERE/keel-upgrade.sh")" ]; then
+    # ① 模板引擎必须语法自洽：交接给一个连语法都过不去的引擎，等于把故障推给子进程
+    bash -n "$SRC_KEEL/checks/keel-upgrade.sh" 2>/dev/null \
+      || die 2 "目标引擎语法校验失败，拒绝交接（目标未改动；换一个 --ref 或 --from）"
+    # ② 模板完整性：版本 / manifest / 每个 kernel 文件的 sha256 与权限
+    if ! bash "$SRC_KEEL/checks/keel-upgrade.sh" --check-manifest "$SRC_KEEL" \
+         > "$TGT_LOG/manifest.handoff" 2>&1; then
+      echo "❌ 模板自检未通过，拒绝交接（目标未改动）：$TGT_LOG/manifest.handoff"
+      sed 's/^/   /' "$TGT_LOG/manifest.handoff" | tail -8
+      exit 2
+    fi
+    # ③ 交接状态落盘；dry-run 不写（"零改动"承诺优先于状态记录）
+    if [ "$DRY" -eq 0 ]; then
+      atomic_write "$BOOT_PENDING" "" "引导交接状态" "" <<EOF
+# keel-bootstrap pending v1（引导交接：旧引擎只搬运，判据交给目标版本引擎）
+from=$CUR
+to=$TOV
+engine_sha=$_bh_sha
+stage=handoff
+EOF
+    fi
+    _bh_args=(--target "$TARGET" --from "$SRC")
+    [ -n "$TO" ] && _bh_args+=(--to "$TO")
+    [ "$DRY" -eq 1 ] && _bh_args+=(--dry-run)
+    [ "$FORCE" -eq 1 ] && _bh_args+=(--force)
+    [ "$NO_ROLLBACK" -eq 1 ] && _bh_args+=(--no-rollback)
+    [ "$SKIP_TL" -eq 1 ] && _bh_args+=(--skip-test-lint)
+    [ "$RESUME" -eq 1 ] && _bh_args+=(--resume)
+    echo "↪ 两阶段引导：当前引擎 v${CUR} → 目标引擎 v${TOV}（实际升级由后者执行）"
+    # 子进程执行新引擎：本脚本可能正被它覆盖，但 rename 不换 inode，
+    # 已打开的脚本文件继续从旧 inode 读，进程不会读到自己被换掉的残片。
+    KEEL_UPGRADE_BOOTSTRAPPED=1 bash "$SRC_KEEL/checks/keel-upgrade.sh" "${_bh_args[@]}"
+    _bh_rc=$?
+    rm -f "$BOOT_PENDING"
+    if [ "$_bh_rc" -eq 0 ]; then
+      echo "↪ 引导完成（判据全部由 v${TOV} 引擎做出）"
+    else
+      echo "↪ 引导未完成（rc=${_bh_rc}）；目标状态以升级断点为准：--resume / --rollback"
+    fi
+    exit "$_bh_rc"
+  fi
+fi
 
 # ---------- 终态校验（v3.9.0 / §9.1-19）----------
 # 为什么要有它：升级的**声明**（"✅ 升级完成"）与**事实**（磁盘上到底是什么样）
@@ -407,47 +524,6 @@ if ver_gt "$CUR" "$TOV"; then
   die 2 "目标版本 $TOV 低于当前 ${CUR}——本工具不支持降级；回滚请用 --rollback"
 fi
 
-# ---------- 单一写路径（v3.9.0 / §9.1-19）----------
-# 为什么要有它：v3.8.0 修的是"每一处漏判"，但漏判的成因是**写动作分散**——
-# kernel / additive / merge / manifest / pending / restore.sh 各自一套 cp、sed、
-# printf 重定向，退出码逐个判断，漏一个就回到"静默成功"。这里收敛成一个函数：
-# 内容从 stdin 读入 → 写临时文件 → 持久化 → 读回校验 → rename → 权限。
-# 任一步失败即 die 2，且**目标文件保持原样**（临时文件清掉、不 rename）。
-# 之后 record_file 用 AW_HASH 复核落盘内容，等于"写完再读回哈希"。
-#
-# $1=目标绝对路径 $2=权限(可空) $3=报错标签 $4=期望 sha256(可空)
-# >>> keel-write-core（lint §9.1-19 豁免区间：唯一允许直接写文件的地方）
-atomic_write() {
-  _aw_dst="$1"; _aw_mode="${2:-}"; _aw_what="${3:-$1}"; _aw_want="${4:-}"
-  _aw_dir=$(dirname "$_aw_dst")
-  mkdir -p "$_aw_dir" 2>/dev/null \
-    || die 2 "创建目录失败: ${_aw_what}（磁盘满或只读？）"
-  _aw_tmp="${_aw_dst}.keel-new.$$"
-  if ! cat > "$_aw_tmp" 2>/dev/null; then
-    rm -f "$_aw_tmp"
-    die 2 "写入失败: ${_aw_what}（磁盘满或只读？已完成 ${DONE_N} 个文件；修复后 --resume 或 --rollback）"
-  fi
-  # 持久化：GNU sync 支持按文件；BSD sync 不接受参数（会直接报错），此时跳过。
-  # rename 的**可见性**不受影响，这里只是把"已经在页缓存里"落到介质。
-  if sync --version >/dev/null 2>&1; then sync "$_aw_tmp" 2>/dev/null || true; fi
-  AW_HASH=$(sha256_of "$_aw_tmp")
-  if [ "$AW_HASH" = "__NO_SHA256__" ] || [ ! -s "$_aw_tmp" ]; then
-    rm -f "$_aw_tmp"
-    die 2 "写入后校验失败（空文件或算不出哈希）: ${_aw_what}；修复后 --resume 或 --rollback"
-  fi
-  if [ -n "$_aw_want" ] && [ "$AW_HASH" != "$_aw_want" ]; then
-    rm -f "$_aw_tmp"
-    die 2 "写入后校验失败（哈希不符）: ${_aw_what}（期望 ${_aw_want}，实际 ${AW_HASH}）"
-  fi
-  if ! mv -f "$_aw_tmp" "$_aw_dst" 2>/dev/null; then
-    rm -f "$_aw_tmp"
-    die 2 "写入失败: ${_aw_what}（rename 失败，磁盘满或只读？已完成 ${DONE_N} 个文件）"
-  fi
-  [ -n "$_aw_mode" ] && chmod "$_aw_mode" "$_aw_dst" 2>/dev/null
-  return 0
-}
-# <<< keel-write-core
-
 # ---------- 断点状态写入（唯一写路径）----------
 pending_write() {   # $1 = 阶段名
   atomic_write "$PENDING" "" "断点状态" "" <<EOF
@@ -510,9 +586,6 @@ gate_report() {
   if _bmsg=$(run_budget); then echo "      ✅ 预算：${_bmsg}"; else echo "      ⚠️  预算：${_bmsg}（不阻断升级，见 lint 段 1）"; fi
 }
 
-TGT_LOG=$(mktemp -d 2>/dev/null) || TGT_LOG="$TARGET/.keel-backup/tmp-logs"
-mkdir -p "$TGT_LOG"
-
 if [ "$DRY" -eq 0 ] && [ "$SKIP_PRE" -eq 0 ]; then
   pending_write preflight
   echo "── 0. 断点状态：${PENDING}（中断后 --resume 续跑 / --rollback 回滚）"
@@ -551,7 +624,7 @@ if [ "$DRY" -eq 0 ]; then
     BK_DIR="$_bkbase"; _bn=1
     while [ -e "$BK_DIR" ]; do BK_DIR="${_bkbase}-${_bn}"; _bn=$((_bn + 1)); done
     mkdir -p "$BK_DIR"
-    cp -pR "$TARGET/keel" "$BK_DIR/keel" || die 2 "备份失败: $BK_DIR（磁盘满或只读？）"  # keel-write:ok 备份整目录
+    cp -pR "$TARGET/keel" "$BK_DIR/keel" || die 2 "备份失败: ${BK_DIR}（磁盘满或只读？）"  # keel-write:ok 备份整目录
     mkdir -p "$BK_DIR/local-mod"
     # restore.sh 在**备份后立刻**生成：此刻空间最充裕，且之后任何阶段失败都已有回滚入口。
     # 它是辅助产物，写不进去只告警（--rollback 仍可用），所以放在子 shell 里接住 die。

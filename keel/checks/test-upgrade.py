@@ -490,6 +490,106 @@ def t_umask(root):
                 % (os.stat(lintf).st_mode & 0o777))
 
 
+def run_engine(eng, args, cwd, env=None):
+    """直接跑目标仓里的引擎（而不是测试自己那份），用于两阶段引导用例。"""
+    e = dict(os.environ)
+    e.pop("KEEL_UPGRADE_BOOTSTRAPPED", None)
+    if env:
+        e.update(env)
+    p = subprocess.run([BASH, eng] + args, cwd=cwd, env=e,
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return p.returncode, p.stdout.decode("utf-8", "replace")
+
+
+@case("两阶段引导①：旧引擎只搬运，目标版本引擎执行（含自身被替换）")
+def t_bootstrap(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    eng = os.path.join(tgt, "keel/checks/keel-upgrade.sh")
+    with open(eng, "a", encoding="utf-8") as fh:
+        fh.write("\n# OLD-ENGINE-MARK\n")   # 制造"本脚本与目标引擎字节不同"
+    rc, out = run_engine(eng, ["--target", tgt, "--from", tpl, "--skip-test-lint"], root)
+    assert_true(rc == 0, "引导升级应成功，实际 %d\n%s" % (rc, out[-800:]))
+    assert_true("两阶段引导" in out and "引导完成" in out, "未走两阶段引导路径")
+    assert_true(version_of(os.path.join(tgt, "keel")) == version_of(os.path.join(tpl, "keel")),
+                "引导后版本未更新")
+    lint = read(os.path.join(tgt, "keel/checks/keel-lint.sh"))
+    assert_true("OLD-KERNEL-MARK" not in lint, "实际升级没有发生（旧内核标记仍在）")
+    assert_true("OLD-ENGINE-MARK" not in read(eng), "正在执行的引擎没有被目标版本替换")
+    assert_true(not os.path.exists(os.path.join(tgt, ".keel-bootstrap.pending")),
+                "引导完成后交接标记未清除")
+    assert_true(not os.path.exists(pending_path(tgt)), "引导完成后升级 pending 未清除")
+
+
+@case("自身替换安全：原地执行新版引擎（无引导）时把自己换掉不崩")
+def t_self_replace(root):
+    # 同版本模板 → 字节相同 → 不触发交接，升级由**目标仓里的这份引擎**原地执行，
+    # 过程中它用 atomic_write(rename) 覆盖自己。rename 不换 inode，运行中的 bash
+    # 继续读旧 inode，不会读到"被截断的新内容"。旧版用裸 cp 就会（3.7.4 实测崩）。
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    eng = os.path.join(tgt, "keel/checks/keel-upgrade.sh")
+    rc, out = run_engine(eng, ["--target", tgt, "--from", tpl, "--skip-test-lint"], root)
+    assert_true(rc == 0, "原地自我替换失败 rc=%d\n%s" % (rc, out[-800:]))
+    assert_true(version_of(os.path.join(tgt, "keel")) == version_of(os.path.join(tpl, "keel")),
+                "原地升级未完成")
+    assert_true("两阶段引导" not in out, "同版本引擎不应触发引导交接")
+
+
+@case("两阶段引导②：模板引擎语法坏 → 拒绝交接，目标零改动")
+def t_bootstrap_bad_engine(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    write(os.path.join(tpl, "keel/checks/keel-upgrade.sh"),
+          "#!/usr/bin/env bash\nif then\n")     # 故意语法错误
+    eng = os.path.join(tgt, "keel/checks/keel-upgrade.sh")
+    before = tree_sig(os.path.join(tgt, "keel"))
+    rc, out = run_engine(eng, ["--target", tgt, "--from", tpl, "--skip-test-lint"], root)
+    assert_true(rc == 2, "应拒绝交接（exit 2），实际 %d\n%s" % (rc, out[-600:]))
+    assert_true("拒绝交接" in out and "目标未改动" in out, "提示未说明「拒绝交接 / 目标未改动」")
+    assert_true(tree_sig(os.path.join(tgt, "keel")) == before, "拒绝交接却改动了目标文件")
+    assert_true(not os.path.exists(os.path.join(tgt, ".keel-bootstrap.pending")),
+                "交接前校验失败却留下引导标记")
+    assert_true(not os.path.isdir(os.path.join(tgt, ".keel-backup")), "拒绝交接却创建了备份")
+
+
+@case("两阶段引导③：子进程失败 → 退出码原样返回，交接标记清理")
+def t_bootstrap_child_fail(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    write(os.path.join(tpl, "keel/checks/keel-lint.sh"),
+          '#!/usr/bin/env bash\necho "❌ 故意坏的 lint"\nexit 1\n')
+    p = subprocess.run([BASH, os.path.join(tpl, "keel/checks/keel-upgrade.sh"),
+                        "--regen-manifest", os.path.join(tpl, "keel")],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    assert_true(p.returncode == 0, "坏模板 regen 失败: " + p.stdout.decode("utf-8", "replace"))
+    eng = os.path.join(tgt, "keel/checks/keel-upgrade.sh")
+    with open(eng, "a", encoding="utf-8") as fh:
+        fh.write("\n# OLD-ENGINE-MARK\n")
+    rc, out = run_engine(eng, ["--target", tgt, "--from", tpl, "--skip-test-lint"], root)
+    assert_true(rc == 3, "子进程门禁失败应原样返回 3，实际 %d\n%s" % (rc, out[-600:]))
+    assert_true("引导未完成" in out, "未说明引导未完成")
+    assert_true(not os.path.exists(os.path.join(tgt, ".keel-bootstrap.pending")),
+                "子进程失败后交接标记未清理")
+    assert_true(not os.path.exists(pending_path(tgt)), "已自动回滚却残留升级 pending")
+
+
+@case("两阶段引导④：dry-run 不写交接标记、零改动")
+def t_bootstrap_dry(root):
+    tgt = make_target(root, "3.4.11")
+    tpl = template_copy(root)
+    eng = os.path.join(tgt, "keel/checks/keel-upgrade.sh")
+    with open(eng, "a", encoding="utf-8") as fh:
+        fh.write("\n# OLD-ENGINE-MARK\n")
+    rc, out = run_engine(eng, ["--target", tgt, "--from", tpl, "--dry-run"], root)
+    assert_true(rc == 0, "dry-run 应 exit 0，实际 %d\n%s" % (rc, out[-600:]))
+    assert_true("dry-run" in out and "两阶段引导" in out, "dry-run 未由目标引擎给计划")
+    assert_true(version_of(os.path.join(tgt, "keel")) == "3.4.11", "dry-run 改了版本号")
+    assert_true(not os.path.isdir(os.path.join(tgt, ".keel-backup")), "dry-run 创建了备份")
+    assert_true(not os.path.exists(os.path.join(tgt, ".keel-bootstrap.pending")),
+                "dry-run 写了交接标记（违反零改动承诺）")
+
+
 def main():
     verbose = "-v" in sys.argv or "--verbose" in sys.argv
     keep = "--keep" in sys.argv
