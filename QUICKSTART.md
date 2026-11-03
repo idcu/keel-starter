@@ -48,14 +48,14 @@ bash keel/checks/test-lint.sh          # 必须 44/44（42 用例 + 2 元检查�
 不需要先手工拷脚本：
 
 ```bash
-bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --ref v3.10.0
+bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --ref v3.11.0
 ```
 
 有了引擎之后，日常升级与回滚：
 
 ```bash
 bash keel/checks/keel-upgrade.sh --target . --dry-run    # 先看计划（不动文件）
-bash keel/checks/keel-upgrade.sh --target . --to v3.10.0 # 升级：前后各跑一次门禁
+bash keel/checks/keel-upgrade.sh --target . --to v3.11.0 # 升级：前后各跑一次门禁
 bash keel/checks/keel-upgrade.sh --target . --rollback   # 回到最近一次升级前
 ```
 
@@ -72,6 +72,8 @@ bash keel/checks/keel-upgrade.sh --target . --rollback   # 回到最近一次升
 - 已是目标版本会明说「无需升级」，重复执行不产生改动。
 - 升级**中途被强杀**（Ctrl-C / 断网 / 磁盘满）：重跑会提示存在未完成升级并 `exit 5`；
   `--resume` 只处理剩余文件（先校验已写文件 sha256），`--rollback` 整目录还原字节与权限。
+  旧引擎（尤其 ≤3.9.x）盘上没有 `--resume`：**重跑 `install.sh`** 即可，它会检测
+  `.keel-upgrade.pending` 并让目标版本引擎带着 `--resume` 接手（v3.11.0 修复）。
 
 ## 5. 常见失败怎么查
 
@@ -88,9 +90,25 @@ bash keel/checks/keel-upgrade.sh --target . --rollback   # 回到最近一次升
 ## 6. 装好后的验收
 
 - [ ] `keel-lint.sh keel` 0 fail
-- [ ] `test-lint.sh` 44/44
+- [ ] `test-lint.sh` 50/50
 - [ ] `keel-doctor.sh` 第 5 节“还差你亲手”的三项已清零
 - [ ] 改一个 `keel/*.md` 后 `git commit` 会被 pre-commit 拦住（证明钩子真的挂上了）
+
+**验证覆盖到哪，要能自己复现**：
+
+```bash
+bash keel/checks/verify/verify.sh --out verify-report.json   # 跑完整清单
+python3 keel/checks/verify/check-verify-report.py --report verify-report.json --summary
+```
+
+- `test-faults.py` 需要 Docker linux 容器。**没有 Docker 时它不是 PASS**：输出
+  `SKIP(no-binary / no-daemon)` 并在汇总单列「0 通过 / 0 失败 / N 跳过（未验证）」，
+  默认 `exit 0`（CI 不因环境缺能力变红）；
+  门禁若要求真跑故障注入，设 `KEEL_FAULTS_REQUIRE_DOCKER=1` → `exit 1`。
+- 清单里只要有 SKIP，发行说明就**不得**出现无条件通过表述，必须写
+  「X 通过 / Y 跳过（未验证）」；`check-verify-report.py` 会在发布前判死这类含混表述。
+- 矩阵 `KEEL_MATRIX_VERSIONS` 可配置起点；设 `KEEL_MATRIX_OFFLINE=1` 时取不到快照的格
+  记 SKIP（不是 PASS）。`KEEL_MATRIX_JOBS=4` 可并行各格，断言一条不减。
 
 下一步不是继续配工具，而是**用几天**：看 AI 在哪类事上仍反复出错，
 再把那一条补进 `CONSTITUTION` / `pitfalls`。Keel 的价值来自你补的那几条，

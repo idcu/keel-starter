@@ -1,4 +1,4 @@
-# keel-manifest v1 version=3.10.0 generated=2026-11-03
+# keel-manifest v1 version=3.11.0 generated=2026-11-04
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455
@@ -11,7 +11,7 @@ kernel	checks/load-estimate.sh	755	c73b2c5fec37ac3c92e77b6016b644828f986609929f3
 kernel	checks/keel-lite.sh	755	e41f5e113c2dedf5f6da1e2324de8d8e24af898b22601768d9a3aeb5e86d80ae
 kernel	checks/verify-hooks.sh	755	08d5179a9f0d0030c123fd55c6b6e137642070f5dd3a2c52fdb015dec8338ab3
 kernel	checks/install-hooks.sh	755	6abd035a643bf11cb9d86233173890c3c3dcea9c81415f053ab33088084675d2
-kernel	checks/install.sh	755	08be19f6f307d33bddcf846c0e1864227f108d562ad2bb7a316bae2e7725a9d8
+kernel	checks/install.sh	755	3e49c537675d3d96e5004907869b04306b15a691fcfd8d9a5c8bfe6ae1eb2e09
 kernel	checks/check-mcp-config.sh	755	d669d2f04a09ba3e4ffc7f993c70e22861639868df14edfa05e8a80ff7290360
 kernel	checks/keel-doctor.sh	644	48f646a3ce330e0d9eb89494ec48344900c3a2fd98bc25e2b5c7cb75f6b27b17
 kernel	checks/perf-baseline.sh	644	bc39f01a71f493337c676889894fe637797e720adfee72da7abc83820a2b72fb
@@ -20,8 +20,11 @@ kernel	checks/mcp/keel-mcp-server.py	755	f09e0288d0824a91f911565e0dbaf21d71454b5
 kernel	checks/retrieval/keel-search.py	755	f83298592609e6ee9c6a6dee1a529bd3815ff7ade9c532d08feb7bb3e1e7b821
 kernel	checks/test-upgrade.sh	755	7212b8881d058e0d36981e51dc2622d06f42bc2d64e2bc184411e85e185cfc70
 kernel	checks/test-upgrade.py	644	1a179e2b433a3404ece75228ac9bef68bbc298e20da65b37233195f1094bc40f
-kernel	checks/matrix/test-upgrade-matrix.sh	755	c9852feafd35adbb4c9176d10c259cac89774468f8e625ba07b6f9be8bda611a
-kernel	checks/matrix/test-upgrade-matrix.py	644	7d61a8e211c713724f632ffaf718337fd72eefd38023da6f3965b247294884c4
+kernel	checks/matrix/test-upgrade-matrix.sh	755	44d931aace034c082aa02085464618899cffcbe60e2bde1ae8295030aad8fa30
+kernel	checks/matrix/test-upgrade-matrix.py	644	52a431d1e366b5d1b48f81a9418b8161fe882b32172c1c5de973bcae4fb5c22c
+kernel	checks/verify/check-verify-report.py	644	c63e59e8884e93b3bb4280376cba1193a4c786153f7c555901ae7f8f9ec3e653
+kernel	checks/verify/verify.py	644	8ffc5bdb31c888086021a35e29f67f9d1482a0e302048f30576ed827f673d71c
+kernel	checks/verify/verify.sh	755	cbf0168723b0eaeb304cf44b2b4430c29f26436a3147501584c1f651e081ae2a
 kernel	checks/hooks/pre-commit	755	9920408d87c4f72d9d4b89a5b8ddd9102b63eb9318fa1c6dc05677fff908c56b
 kernel	checks/hooks/commit-msg	755	f87ae2a27c611999aa7ec294f13c2cf5049238967e465d9118bc40a667256a6b
 merge	INDEX.md	644	
@@ -72,4 +75,4 @@ preserve	pitfalls/meta/worktree-eol-differs-from-main.md	644
 preserve	pitfalls/meta/xargs-arg-becomes-filename.md	644	
 preserve	NOW-history/2026-09-30-初始模板.md	644	
 preserve	NOW-history/2026-10-15-度量回顾.md	644	
-kernel	checks/test-faults.py	644	d9eb944ca1e389b3c8780b76fac268a57c77ee0e1763dc7010cfc16b9fa5de64
+kernel	checks/test-faults.py	644	5744a29976bf2d65cc73ebd46e09f4412519c863fb40797fbe44012864c76a02

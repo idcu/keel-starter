@@ -4,6 +4,50 @@
 升级按该字段增量合并，**不允许"一键覆盖"**（设计稿 §12.3）。
 本仓是发布仓：改动先在此发布，再更新项目仓里的子模块指针。
 
+## 3.11.0 — 2026-11-03
+
+**验证的「诚实」机制化：故障自测的三环境语义、3.6.x 矩阵格、机器可读清单进入发布链路。**
+（新增能力与语义 → minor）
+
+- **test-faults 降级语义**：环境探测从「一个布尔」拆成 `ok / disabled / no-binary /
+  no-daemon / non-linux` 五态，输出可区分 `PASS / FAIL / SKIP(原因)`；无 Docker 时
+  汇总单列「0 通过 / 0 失败 / N 跳过（未验证）」，**绝不**输出无条件通过表述。
+  默认策略：跳过并计入未验证、`exit 0`（CI 不因缺 Docker 变红）；门禁要求真跑时
+  设 `KEEL_FAULTS_REQUIRE_DOCKER=1` → `exit 1`。另加 6 条判死自检：无断言输出、
+  有 FAIL 行、`LINT≠0` 都不得算 PASS，跳过策略不得退化成无条件通过表述。
+- **矩阵补 3.6.1 为默认格**：`KEEL_MATRIX_VERSIONS` 默认改为
+  `3.6.1,3.7.4,3.8.0,3.9.0,current`。实测 3.6.1 的引擎早于 v3.7.1，没有
+  `--resume`/故障钩子——矩阵按能力探测改走 `install.sh` 引导路径（目标版本引擎）
+  验证续跑/回滚，而不是拿新判据去要求旧引擎（那会红在「历史版本没这个能力」）。
+- **修复恢复入口**：起点引擎是旧版时，更新中断后盘上的引擎仍是旧的，重跑
+  `install.sh` 原本会以「存在未完成升级」exit 5，并把 `--resume` 指向不支持它的
+  旧引擎（实测报「未知参数」）。现在 `install.sh` 检测到 `.keel-upgrade.pending`
+  就把断点交给目标版本引擎 `--resume`。矩阵的 3.6.1 格覆盖了这条真实路径。
+- **机器可读验证清单**：`keel/checks/verify/verify.py` 跑完整套件并产出
+  `verify-report.json`（套件名 / PASS‑FAIL‑SKIP / 跳过原因 / 用例数 / 耗时 /
+  平台、locale、容器镜像、引擎版本 / 覆盖的矩阵格）。
+  `check-verify-report.py` 把清单与发行说明对照：清单含 SKIP 或 FAIL 时，
+  说明不得出现任何无条件通过表述（含英文变体），且必须写「X 通过 / Y 跳过（未验证）」；
+  套件标 PASS 却记录跳过 = 伪装 PASS，直接判死。`--selftest` 用 8 个构造样例证明
+  判据会红。`scripts/release.sh` 在推送前跑完整清单，并据此打印发行说明一节、
+  校验 CHANGELOG 当前版本小节。
+- **采用方复现**：`bash keel/checks/verify/verify.sh --out verify-report.json`；
+  再 `python3 keel/checks/verify/check-verify-report.py --report verify-report.json --summary`。
+- **矩阵耗时**：新增 3.6.1 使串行总耗时 113s → 170s（+57s，因该格还要走一遍
+  `install.sh` 引导以验证续跑/回滚）；快照按 tag 缓存，命中即复用。新增
+  `KEEL_MATRIX_JOBS`（默认 1）并行调度，`KEEL_MATRIX_JOBS=4` 实测 68s，
+  断言一条不减。
+- **本轮验证状况**：98 通过 / 0 失败 / 1 跳过（未验证）（macOS，Docker 可用；
+  test-lint 50、test-upgrade 24、test-faults 7、矩阵 7 格、判据自检 8、
+  lint/manifest 各 1）。跳过项是 test-lint 用例 44（仅大小写不同的文件名在
+  macOS 大小写不敏感卷上无法构造）；Windows / Git Bash 的同名覆盖行为仍未验证。
+  DOC / PROSE 两项元检查在项目仓（同一套代码）实测 50/50 通过。
+- **本轮未验证项（明确列出，不用无条件表述掩盖）**：
+  - 无 Docker 与 daemon 不可用环境下的**真实故障注入**未跑：只实测了它们的
+    `SKIP(原因)` 语义，故障本身未验证（需有 Docker 的机器复跑）。
+  - 跨版本矩阵未覆盖 3.5.x、3.10.x 起点；3.6.1 只取了该系列一个代表格。
+  - EROFS 在无 `SYS_ADMIN` 的 CI 环境未验证；本机 Docker Desktop 下可用，7 例全过。
+
 ## 3.10.0 — 2026-11-03
 
 **两阶段引导：升级判据永远由目标版本的引擎执行；跨版本矩阵把"旧引擎误判"机制化。**
