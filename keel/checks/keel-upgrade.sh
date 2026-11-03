@@ -296,14 +296,24 @@ echo "keel-upgrade · 目标=$TARGET · $CUR → $TOV · 模式=$([ "$DRY" -eq 1
 # 每一步自己没报错，不说明拼起来是一个完整、可回滚、可续跑的升级结果。
 final_verify() {
   _fv_bad=""
+  _fv_from=$(pending_get "$PENDING" from)
   _fv_v=$(read_version "$TARGET/keel/INDEX.md")
   [ "$_fv_v" = "$TOV" ] || _fv_bad="${_fv_bad}
    - 版本不符：INDEX.md 是 ${_fv_v:-<空>}，期望 ${TOV}"
-  [ ! -f "$PENDING" ] || _fv_bad="${_fv_bad}
-   - 断点状态未清除：${PENDING}"
-  if [ -z "${BK_DIR:-}" ] || [ ! -d "$BK_DIR/keel" ] || [ ! -f "$BK_DIR/restore.sh" ]; then
+  # pending 此时必须已进入 done：真正的「清除」在调用方紧随其后做并复核。
+  # 不在这里要求"文件不存在"——那样一旦校验失败，就没有 --resume 这条路了。
+  [ "$(pending_stage "$PENDING")" = "done" ] || _fv_bad="${_fv_bad}
+   - 断点状态未进入终态（stage=$(pending_stage "$PENDING")）"
+  # "备份可回滚"看的是**备份树本身**，不是 restore.sh 是否存在：
+  # 3.8.x 及更早的引擎不会预先写 restore.sh（v3.9.0 才提前生成），
+  # 早先按"必须有 restore.sh"判，会让所有从旧版升上来的用户被误判失败（实测踩到）。
+  if [ -z "${BK_DIR:-}" ] || [ ! -d "$BK_DIR/keel" ]; then
     _fv_bad="${_fv_bad}
    - 备份不可回滚：${BK_DIR:-<空>}"
+  else
+    _fv_bv=$(read_version "$BK_DIR/keel/INDEX.md")
+    [ "$_fv_bv" = "${_fv_from:-$CUR}" ] || _fv_bad="${_fv_bad}
+   - 备份版本不符：${_fv_bv:-<空>} ≠ ${_fv_from:-$CUR}"
   fi
   if ! bash "$TARGET/keel/checks/keel-upgrade.sh" --check-manifest "$TARGET/keel" >/dev/null 2>&1; then
     _fv_bad="${_fv_bad}
@@ -313,15 +323,18 @@ final_verify() {
   [ -z "$_fv_tmp" ] || _fv_bad="${_fv_bad}
    - 残留临时文件：${_fv_tmp#"$TARGET"/}"
   [ -z "$_fv_bad" ] || die 2 "终态校验失败，未声明成功（备份在 ${BK_DIR:-<空>}，可 --rollback）${_fv_bad}"
-  echo "   终态校验：版本 / pending / 备份 / manifest / 临时文件 5 项均通过"
+  echo "   终态校验：版本 / 断点终态 / 备份可回滚 / manifest / 临时文件 5 项均通过"
 }
 
 # ---------- 未完成升级：检测与续跑前校验 ----------
+FROM_V="$CUR"
 RESUME_STAGE=""
 DONE_FILES=""; DONE_N=0
 if [ -f "$PENDING" ]; then
   PTO=$(pending_get "$PENDING" to)
   PST=$(pending_stage "$PENDING")
+  _pv=$(pending_get "$PENDING" from)
+  [ -n "$_pv" ] && FROM_V="$_pv"
   if [ "$RESUME" -eq 0 ]; then
     echo "⚠️  检测到一次未完成的升级：$PENDING"
     echo "   状态：$CUR → ${PTO}（阶段 ${PST}）"
@@ -339,8 +352,9 @@ if [ -f "$PENDING" ]; then
   if [ "$PST" = "done" ]; then
     # 上次已走完门禁、只是 pending 没删干净：仍要过终态校验才允许声明成功
     BK_DIR=$(pending_get "$PENDING" backup)
-    rm -f "$PENDING"
     final_verify
+    rm -f "$PENDING"
+    [ ! -f "$PENDING" ] || die 2 "断点状态未能清除: ${PENDING}"
     echo "✅ 上次升级已完成（残留的 pending 已清理，终态复核通过）"
     exit 0
   fi
@@ -438,7 +452,7 @@ atomic_write() {
 pending_write() {   # $1 = 阶段名
   atomic_write "$PENDING" "" "断点状态" "" <<EOF
 # keel-upgrade pending v1（断点恢复状态，勿手改）
-from=$CUR
+from=${FROM_V:-$CUR}
 to=$TOV
 stage=$1
 backup=${BK_DIR:-}
@@ -530,7 +544,12 @@ if [ "$DRY" -eq 0 ]; then
     echo "── 2. 沿用断点备份：${BK_DIR}（续跑不重新备份）"
   else
     mkdir -p "$TARGET/.keel-backup"
-    BK_DIR="$TARGET/.keel-backup/$(printf '%s' "$CUR" | tr '/ ' '__')-to-$(printf '%s' "$TOV" | tr '/ ' '__')-$(date +%Y%m%d-%H%M%S)"
+    _bkbase="$TARGET/.keel-backup/$(printf '%s' "$CUR" | tr '/ ' '__')-to-$(printf '%s' "$TOV" | tr '/ ' '__')-$(date +%Y%m%d-%H%M%S)"
+    # 同一秒内重试会撞名：上一次失败留下的**残备份**还在原路径上，`cp -pR src dst`
+    # 遇到已存在的 dst 会复制成 dst/keel（嵌套一层），终态校验就读不到 $BK_DIR/keel/INDEX.md。
+    # 所以目录名必须唯一（实测：备份失败后立刻 --resume，必然撞在同一秒）。
+    BK_DIR="$_bkbase"; _bn=1
+    while [ -e "$BK_DIR" ]; do BK_DIR="${_bkbase}-${_bn}"; _bn=$((_bn + 1)); done
     mkdir -p "$BK_DIR"
     cp -pR "$TARGET/keel" "$BK_DIR/keel" || die 2 "备份失败: $BK_DIR（磁盘满或只读？）"  # keel-write:ok 备份整目录
     mkdir -p "$BK_DIR/local-mod"
@@ -696,12 +715,12 @@ done
 # restore.sh 在备份阶段就已生成（§2），此时空间可能已被 apply 吃掉，不再重写。
 [ -f "$BK_DIR/restore.sh" ] || echo "⚠️  备份目录缺 restore.sh（回滚请用 --rollback）"
 
-# 先落 stage=done（万一终态校验失败，--resume 还能走到 done 分支复核），再清 pending。
+# 先落 stage=done 再复核，最后才清除 pending：任何一步失败都还留着续跑的路。
 pending_write done
-rm -f "$PENDING"
-
 # 终态校验必须在**打印成功之前**：所有成功信息只能出现在这行之后。
 final_verify
+rm -f "$PENDING"
+[ ! -f "$PENDING" ] || die 2 "断点状态未能清除: ${PENDING}"
 
 echo "──"
 echo "✅ 升级完成：$CUR → ${TOV}（内核覆盖 $UPDATED · 新增 $ADDED · 保留 ${KEPT}$([ "$SKIPPED" -gt 0 ] && echo " · 续跑跳过 ${SKIPPED}")）"
@@ -709,5 +728,5 @@ if [ -n "$MODIFIED" ]; then
   echo "⚠️  以下内核文件本地有改动，已被升级覆盖；原文件在 $BK_DIR/local-mod/："
   for _m in $MODIFIED; do echo "      - $_m"; done
 fi
-echo "   回滚：bash keel/checks/keel-upgrade.sh --rollback   （或 $BK_DIR/restore.sh）"
+echo "   回滚：bash keel/checks/keel-upgrade.sh --rollback   （或 $BK_DIR/restore.sh，若有）"
 exit 0
