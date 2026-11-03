@@ -114,7 +114,16 @@ if [ "$EXISTING" -eq 1 ]; then
   printf '# keel-bootstrap pending v1（引导交接：install.sh 只搬运，判据交给目标版本引擎）\nfrom=%s\nto=%s\nstage=install-handoff\n' \
     "${CURV:-unknown}" "$TOV" > "$BOOT.tmp.$$" && mv -f "$BOOT.tmp.$$" "$BOOT" \
     || { echo "❌ 无法写引导交接状态（磁盘满或只读？目标未改动）"; rm -f "$BOOT.tmp.$$"; exit 2; }
-  bash "$UP" --target "$TARGET" --from "$tmp/starter"
+  # 旧引擎没有 --resume（≤3.9.x，3.6.x 尤甚）：若上一轮升级在 backup 阶段被打断，
+  # 目标盘上的引擎仍是旧的，重跑 install.sh 若只做普通升级，新引擎会以「存在未完成
+  # 升级」exit 5，而它给出的 --resume 命令指向旧引擎——直接报「未知参数」。
+  # 所以恢复入口必须在这里：检测断点后由**目标版本引擎**带着 --resume 接手。
+  _bh_args=(--target "$TARGET" --from "$tmp/starter")
+  if [ -f "$TARGET/.keel-upgrade.pending" ]; then
+    echo "   ℹ️  检测到未完成的升级断点 → 目标版本引擎 --resume（旧引擎无续跑能力）"
+    _bh_args+=(--resume)
+  fi
+  bash "$UP" "${_bh_args[@]}"
   rc=$?
   rm -f "$BOOT"
   if [ "$rc" -ne 0 ]; then
