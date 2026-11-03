@@ -245,6 +245,34 @@ if [ "$rc" -eq 0 ] && grep -q '^keel-version: 3.7.0$' "$T/keel/INDEX.md"; then e
     return rc, out
 
 
+_EROFS_PROBE = {}
+
+
+def probe_erofs():
+    """能力探测：容器是否真的能把挂载点 remount 成只读。
+
+    为什么不再"无 SYS_ADMIN 就 fail"：那会把"环境不给能力"记成"代码有问题"，
+    红得没有信息量；反过来静默跳过又会假装验证过。折中：探测失败 →
+    SKIP + 明确原因，汇总里单列「未验证」，与 PASS 分开计数。
+    """
+    if "ok" in _EROFS_PROBE:
+        return _EROFS_PROBE["ok"], _EROFS_PROBE["why"]
+    if os.environ.get("KEEL_EROFS_CAP") == "off":
+        # 强制模拟"没有能力"，用于验证探测失败 → SKIP → 未验证计数这条分支本身。
+        # 正常跑不设它，探测按真实能力走。
+        _EROFS_PROBE.update(ok=False, why="KEEL_EROFS_CAP=off（强制模拟无 SYS_ADMIN）")
+        return False, _EROFS_PROBE["why"]
+    script = ("mkdir -p /tmp/p && mount -t tmpfs -o size=1m,exec tmpfs /tmp/p 2>/dev/null "
+              "&& mount -o remount,ro /tmp/p 2>/dev/null && umount /tmp/p 2>/dev/null "
+              "&& echo PROBE-OK || echo PROBE-FAIL")
+    rc, out = run_container("mkdir -p /work\n" + script, "/work", caps=["SYS_ADMIN"])
+    if "PROBE-OK" in out:
+        _EROFS_PROBE.update(ok=True, why="ok")
+    else:
+        _EROFS_PROBE.update(ok=False, why="容器内无法 remount 只读（SYS_ADMIN 未授予？rc=%d）" % rc)
+    return _EROFS_PROBE["ok"], _EROFS_PROBE["why"]
+
+
 def t_erofs():
     """只读文件系统（EROFS）：先在 preflight 就只读，再测"写到一半变只读"。
 
@@ -252,6 +280,9 @@ def t_erofs():
     不产生 pending 与备份、目标树哈希不变；apply 中途转只读时断言 pending 可读、
     已记录文件与磁盘一致、无 0 字节脚本；恢复可写后 --resume 能续完。
     """
+    ok, why = probe_erofs()
+    if not ok:
+        return 0, "SKIP: " + why
     tov = version_of(TEMPLATE)
     script = "mkdir -p /rofs\nmount -t tmpfs -o size=8m,exec tmpfs /rofs || echo 'FAIL: 无法建立 /rofs'\n" \
              + prelude("/rofs/proj", tov) + r"""
@@ -456,9 +487,14 @@ def main():
         return 0
     print("keel-upgrade 真实故障自测 · 镜像 %s · 模板 %s" % (IMAGE, TEMPLATE_REL))
     print("=" * 76)
-    failed = 0
+    failed = skipped = 0
     for name, fn in CASES:
         rc, out = fn()
+        if out.startswith("SKIP:"):        # 能力探测失败 → 未验证，不是 PASS 也不是 FAIL
+            skipped += 1
+            print("[SKIP] %s（未验证）" % name)
+            print("    " + out[5:].strip())
+            continue
         ok2, msg = summarize(out)
         passed = rc == 0 and ok2
         print("[%s] %s" % ("PASS" if passed else "FAIL", name))
@@ -468,9 +504,11 @@ def main():
             for line in out.splitlines()[-10:]:
                 print("    | " + line)
     print("=" * 76)
-    print("%s：%d/%d（跳过条件见文件头；无 Docker 时本套件整体 SKIP）"
+    print("%s：%d 通过 / %d 失败 / %d 跳过（未验证）"
           % ("✅ 真实故障自测通过" if not failed else "❌ 真实故障自测失败",
-             len(CASES) - failed, len(CASES)))
+             len(CASES) - failed - skipped, failed, skipped))
+    if skipped:
+        print("   ⚠️ 未验证的用例不计入 PASS（原因见上方 SKIP 行；补足能力后重跑才算验证）")
     return 1 if failed else 0
 
 
