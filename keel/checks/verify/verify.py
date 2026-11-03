@@ -111,15 +111,20 @@ def parse_test_lint(rc, out):
     # 必须进清单；只打印在原始输出里、清单记 0 跳过，等于在机器可读层伪装 PASS。
     skips = [l.strip() for l in out.splitlines() if l.startswith("[SKIP]")]
     reason = "；".join(skips)
+    # test-lint 的口径是「跳过计入分母、也计入 ok」（保证平台无关的 50/50 承诺），
+    # 所以打印的 ok **包含**被跳过的用例。清单若照抄 ok，就会把同一个用例既记
+    # passed 又记 skipped，总和比实际多 1（v3.12.0 实测：98+0+1 vs 100）。
+    # 因此这里减去 skips，并对 cases 不再叠加——passed + failed + skipped == cases。
     m = re.search(r"✅ 自测通过：(\d+)/(\d+)（(\d+) 用例 \+ 2 元检查）", out)
     if m:
-        return {"passed": int(m.group(1)), "failed": 0, "skipped": len(skips),
-                "cases": int(m.group(3)) + 2 + len(skips), "reason": reason}
+        ok = int(m.group(1))
+        return {"passed": ok - len(skips), "failed": 0, "skipped": len(skips),
+                "cases": int(m.group(3)) + 2, "reason": reason}
     m = re.search(r"❌ 自测失败：(\d+) 项未通过（共 (\d+) 项）", out)
     if m:
         bad, total = int(m.group(1)), int(m.group(2))
-        return {"passed": total - bad, "failed": bad, "skipped": len(skips),
-                "cases": total + len(skips), "reason": reason}
+        return {"passed": total - bad - len(skips), "failed": bad, "skipped": len(skips),
+                "cases": total, "reason": reason}
     if rc == 2:
         return {"passed": 0, "failed": 0, "skipped": 0, "cases": 0,
                 "reason": out.strip().splitlines()[-1] if out.strip() else "缺 python3"}

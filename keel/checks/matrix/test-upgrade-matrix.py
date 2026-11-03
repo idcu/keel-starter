@@ -6,8 +6,8 @@
     python3 keel/checks/test-upgrade-matrix.py [-v]
 
 做什么：把「起点版本」当成矩阵的一维，逐格验证**旧引擎执行的升级**不因新判据
-的新假设而失败。默认格：v3.6.1、v3.7.4、v3.8.0、v3.9.0、current（幂等），外加
-v3.4.11（≤3.5.0，没有升级引擎，只能走 install.sh 引导）作为独立用例。
+的新假设而失败。默认引擎格：v3.6.1、v3.7.4、v3.8.0、v3.9.0、v3.10.0、current（幂等）；
+外加 v3.4.11 与 v3.5.0（≤3.5.0 没有升级引擎，只能走 install.sh 引导）作为独立用例。
 v3.6.1 是 3.6.x 时代的代表格：它的备份布局与引擎分支与 3.7+ 不同，单独一档
 用来证明「起点更旧」不会因新判据的新假设而被误判。
 
@@ -77,8 +77,10 @@ KEEL = _find_keel(HERE)
 BASH = shutil.which("bash") or "bash"
 ANCHOR = "任何任务开始前，先读 keel/INDEX.md 与其中指向的 NOW.md，并遵守 INDEX.md 里的检索协议。"
 
-DEFAULT_VERSIONS = "3.6.1,3.7.4,3.8.0,3.9.0,current"
-INSTALL_CELL = "3.4.11"
+DEFAULT_VERSIONS = "3.6.1,3.7.4,3.8.0,3.9.0,3.10.0,current"
+# ≤3.5.0 没有升级引擎，只能走 install.sh 引导；它们是 install 用例而不是引擎格。
+INSTALL_CELLS = ("3.4.11", "3.5.0")
+INSTALL_CELL = INSTALL_CELLS[0]
 CACHE = os.environ.get("KEEL_MATRIX_CACHE") or os.path.join(tempfile.gettempdir(), "keel-matrix-cache")
 OFFLINE = os.environ.get("KEEL_MATRIX_OFFLINE") == "1"
 
@@ -467,22 +469,22 @@ def make_matrix_repo(root, old_snap, ver=INSTALL_CELL):
     return repo
 
 
-def install_cell(root):
+def install_cell(root, ver=INSTALL_CELL):
     """≤3.5.0 没有升级引擎：只能重跑 install.sh 引导。验证引导真的把目标升上去。"""
     t0 = time.time()
     try:
-        snap = snapshot(INSTALL_CELL)
+        snap = snapshot(ver)
     except Skip as e:
         return "SKIP", [str(e), "耗时 %.1fs" % (time.time() - t0)]
     cur = cur_version()
     tgt = os.path.join(root, "install")
     os.makedirs(tgt)
     inst = os.path.join(KEEL, "checks/install.sh")
-    env = {"KEEL_INSTALL_REPO": make_matrix_repo(root, snap)}
-    rc, out = run([BASH, inst, tgt, "--ref", "v" + INSTALL_CELL, "--with-anchor"], root, env=env)
+    env = {"KEEL_INSTALL_REPO": make_matrix_repo(root, snap, ver)}
+    rc, out = run([BASH, inst, tgt, "--ref", "v" + ver, "--with-anchor"], root, env=env)
     if rc != 0:
-        return "FAIL", ["v%s 初次安装失败 rc=%d: %s" % (INSTALL_CELL, rc, out.strip().splitlines()[-1])]
-    if version_of(os.path.join(tgt, "keel")) != INSTALL_CELL:
+        return "FAIL", ["v%s 初次安装失败 rc=%d: %s" % (ver, rc, out.strip().splitlines()[-1])]
+    if version_of(os.path.join(tgt, "keel")) != ver:
         return "FAIL", ["初次安装版本不对: " + version_of(os.path.join(tgt, "keel"))]
     now = os.path.join(tgt, "keel/NOW.md")
     write(now, read(now) + "\n## 采用方自定义\n- install 引导用例的自定义\n")
@@ -496,7 +498,7 @@ def install_cell(root):
         return "FAIL", ["引导后版本不是 %s" % cur]
     bad = check_kernel_bytes(tgt, KEEL)
     bad += ["自定义被改: " + k for k, h in custom.items() if sha(os.path.join(tgt, "keel", k)) != h]
-    bad += check_final_state(tgt, INSTALL_CELL, KEEL)
+    bad += check_final_state(tgt, ver, KEEL)
     if os.path.exists(os.path.join(tgt, ".keel-bootstrap.pending")):
         bad.append("引导标记未清除")
     ok, _ = check_lint(tgt)
@@ -504,7 +506,7 @@ def install_cell(root):
         bad.append("lint 未通过")
     if bad:
         return "FAIL", bad
-    return "PASS", ["%s 无引擎 → install.sh 引导 → %s，内核/自定义/终态/门禁全过" % (INSTALL_CELL, cur),
+    return "PASS", ["%s 无引擎 → install.sh 引导 → %s，内核/自定义/终态/门禁全过" % (ver, cur),
                     "耗时 %.1fs" % (time.time() - t0)]
 
 
@@ -555,11 +557,12 @@ def main():
     vers = [v.strip() for v in os.environ.get("KEEL_MATRIX_VERSIONS", DEFAULT_VERSIONS).split(",") if v.strip()]
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     root = tempfile.mkdtemp(prefix="keel-matrix-")
-    print("跨版本升级矩阵 · 目标 %s · 格 %s · 缓存 %s" % (cur_version(), ",".join(vers), CACHE))
+    print("跨版本升级矩阵 · 目标 %s · 格 %s · install %s · 缓存 %s"
+          % (cur_version(), ",".join(vers), ",".join(INSTALL_CELLS), CACHE))
     print("=" * 78)
     # 并行前先串行预热快照缓存：解包/rename 落到同一路径，多线程同时首次取用会打架。
     # 预热只做"取快照"，不做断言；取不到的格留给 cell() 报 SKIP。
-    for warm in sorted(set(vers + [INSTALL_CELL, "3.8.0"])):
+    for warm in sorted(set(vers + list(INSTALL_CELLS) + ["3.8.0"])):
         try:
             snapshot(warm)
         except Skip:
@@ -571,10 +574,11 @@ def main():
         tasks.append((lambda v=v, cell_root=cell_root: (v, cell(v, cell_root, verbose)),
                       "%s → %s" % (v, cur_version())))
     if os.environ.get("KEEL_MATRIX_NO_INSTALL_CELL") != "1":
-        croot = os.path.join(root, "m-install")
-        os.makedirs(croot, exist_ok=True)
-        tasks.append((lambda croot=croot: (INSTALL_CELL + "(install)", install_cell(croot)),
-                      "%s（install.sh 引导）" % INSTALL_CELL))
+        for iv in INSTALL_CELLS:
+            croot = os.path.join(root, "m-install-" + iv.replace(".", "_"))
+            os.makedirs(croot, exist_ok=True)
+            tasks.append((lambda croot=croot, iv=iv: (iv + "(install)", install_cell(croot, iv)),
+                          "%s（install.sh 引导）" % iv))
     rroot = os.path.join(root, "m-reg")
     os.makedirs(rroot, exist_ok=True)
     tasks.append((lambda rroot=rroot: ("REG-1", regression_old_backup(rroot)),

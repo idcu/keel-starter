@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # test-upgrade-matrix.sh —— 跨版本升级矩阵入口（DESIGN.md §12.3 / ADR 0020）
 # 用法: bash keel/checks/test-upgrade-matrix.sh [-v]
-#       KEEL_MATRIX_VERSIONS="3.6.1,3.7.4,3.8.0,3.9.0,current"  # 可配置格
+#       KEEL_MATRIX_VERSIONS="3.6.1,3.7.4,3.8.0,3.9.0,3.10.0,current"  # 可配置引擎格
 #       KEEL_MATRIX_OFFLINE=1                             # 禁止联网取历史 tag
-#       KEEL_MATRIX_NO_INSTALL_CELL=1                     # 跳过 ≤3.5.0 的 install 引导格
+#       KEEL_MATRIX_NO_INSTALL_CELL=1                     # 跳过 3.4.11 / 3.5.0 的 install 引导格
 # 退出码: 0 = 无失败（可能含 SKIP，SKIP 在汇总单列「未验证」）；1 = 有格失败；2 = 缺 python3
 #
 # 为什么单列一个入口：矩阵跑的是「旧引擎 + 新模板」的真实组合，

@@ -9,6 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 矩阵要 `git archive v3.5.0 / v3.10.0`；浅 clone 没有历史 tag，会全部 SKIP。
+          fetch-depth: 0
 
       # 先验护栏：如果 lint 本身坏了，下面的"0 fail"毫无意义
       - name: 自测（lint 能判死它声称能判死的问题）
@@ -21,8 +24,35 @@ jobs:
 
       # 升级引擎也要"验谎"：改 manifest 或改分类逻辑后，五类场景（正常/跨版本/
       # 保留自定义/失败回滚/幂等）必须有机器证明，否则一条命令升级就是空口承诺
-      - name: 升级引擎自测（11 项场景）
+      - name: 升级引擎自测（24 项场景）
         run: bash keel/checks/test-upgrade.sh
+
+      # 无 Docker 不是代码失败，但也不能"绿着不说"：默认 SKIP 并计入未验证，
+      # 同时把跳过行写进 GitHub Step Summary，让 CI 汇总页能看到原因。
+      - name: 降级语义（Docker 不可用时显式 SKIP，原因进 CI 摘要）
+        run: |
+          set -uo pipefail
+          python3 keel/checks/test-faults.py | tee /tmp/faults.log
+          rc=${PIPESTATUS[0]}
+          {
+            echo "### 降级语义（test-faults）"
+            grep -E "跳过（未验证）|SKIP|通过" /tmp/faults.log || true
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          exit "$rc"
+
+      # 跨版本矩阵进 CI：判据必须对旧世界生效，而不是只在当前版本自洽。
+      # 4 路并行会争用 runner 的 CPU，固定 2 路；SKIP（例如 tag 取不到）同样进摘要。
+      - name: 跨版本升级矩阵（9 格，SKIP 原因进 CI 摘要）
+        run: |
+          set -uo pipefail
+          KEEL_MATRIX_JOBS=2 bash keel/checks/matrix/test-upgrade-matrix.sh | tee /tmp/matrix.log
+          rc=${PIPESTATUS[0]}
+          {
+            echo "### 跨版本升级矩阵"
+            grep -E -A3 "^\[SKIP\]" /tmp/matrix.log || true
+            grep -E "^\[FAIL\]|矩阵通过|矩阵失败|跳过（未验证）" /tmp/matrix.log || true
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          exit "$rc"
 
       - name: 内核校验（预算 / frontmatter / 值域 / 命名 / 登记 / 死链 / 孤儿 / 陈旧 / 状态机 / 闭环钩子）
         run: bash keel/checks/keel-lint.sh keel
