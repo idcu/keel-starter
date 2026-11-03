@@ -4,6 +4,26 @@
 升级按该字段增量合并，**不允许"一键覆盖"**（设计稿 §12.3）。
 本仓是发布仓：改动先在此发布，再更新项目仓里的子模块指针。
 
+## 3.9.0 — 2026-11-03
+
+**「写失败却报成功」机制化：单一写路径 + 静态判据 + 终态校验；故障覆盖补齐四类。**
+（采用方可能由绿转红：新增 fail 判据 → minor）
+
+- `keel-upgrade.sh`：所有落盘（kernel / additive / merge / manifest / pending / restore.sh）
+  收敛到唯一的 `atomic_write`（temp → sync → 读回哈希 → rename → 失败 `die 2`），
+  目标文件在 ENOSPC / EROFS 时**保持原样**，临时文件清掉；`record_file` 再把磁盘读回
+  的哈希与写入内容复核一次。
+- 新增 `final_verify`：声明成功前必须复核 ① `keel-version` 等于目标版本 ② pending 已清除
+  ③ 备份含 `restore.sh` 可回滚 ④ `--check-manifest` 与磁盘一致 ⑤ 无 `*.keel-new.*` 残留；
+  任一不成立即 `die 2`。「✅ 升级完成」只能出现在它之后（静态判据守这条）。
+- `keel-lint.sh` 新增第 16 段「写路径收敛」（§9.1-19）：升级脚本里除 `atomic_write` 本体
+  （`# >>> keel-write-core` 区间）与标 `# keel-write:ok` 的整目录备份/回滚、heredoc 数据体外，
+  裸 `cp`/`mv`/`install`、`sed -i`、重定向写 `$TARGET` 下的文件一律 fail。
+- `test-lint.py`：新增用例 45（裸 `cp`）、46（`sed -i`）、47（重定向写目标）、48（成功信息
+  早于终态校验）。口径 46/46 → **50/50（48 用例 + 2 元检查）**。
+- `test-faults.py`：新增 4 例真实故障——gate 阶段磁盘满、EROFS（preflight 与 apply 中途）、
+  配额下的部分写入、拉到一半断网。3 → **7 例**（无 Docker 时整套 SKIP，CI 不变红）。
+
 ## 3.8.0 — 2026-11-03
 
 **升级引擎：真实磁盘满/断网下的隐式失败 → 显式失败 + 原子写；lint 增跨平台底线。**
