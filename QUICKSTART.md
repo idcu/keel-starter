@@ -48,14 +48,14 @@ bash keel/checks/test-lint.sh          # 必须 50/50（48 用例 + 2 元检查�
 不需要先手工拷脚本：
 
 ```bash
-bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --ref v3.11.0
+bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --ref v3.12.0
 ```
 
 有了引擎之后，日常升级与回滚：
 
 ```bash
 bash keel/checks/keel-upgrade.sh --target . --dry-run    # 先看计划（不动文件）
-bash keel/checks/keel-upgrade.sh --target . --to v3.11.0 # 升级：前后各跑一次门禁
+bash keel/checks/keel-upgrade.sh --target . --to v3.12.0 # 升级：前后各跑一次门禁
 bash keel/checks/keel-upgrade.sh --target . --rollback   # 回到最近一次升级前
 ```
 

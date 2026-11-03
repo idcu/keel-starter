@@ -1,8 +1,8 @@
 ---
 scope: now
 status: active
-last-verified: 2026-11-02
-updated: 2026-11-02
+last-verified: 2026-11-04
+updated: 2026-11-04
 keywords: [焦点, 交接]
 ---
 
@@ -26,14 +26,6 @@ keywords: [焦点, 交接]
 |---|---|---|
 | 无 | —— | —— |
 
-## 写回 2026-11-02
-
-- 度量回顾 2026-10-15 已沉 `NOW-history/`（窗口 10-01→10-15 三指标基线 + 补层计划）。
-- 随第四轮评估整改：test-lint 增 PROSE 元检查（散文数字机器判死，项目仓 ADR 0018）；
-  本仓 README 4 处漂移修正；发 v3.4.12（CHANGELOG 有当期小节）。
-- P2-1 闭环：10-15 度量回顾上轮遗漏提交，本轮补交（2e8c07b）。
-- 门禁：lint 0 fail · 自测 43/43 + DOC + PROSE 全绿（macOS）。
-
 ## 写回 2026-11-03
 
 - v3.7.1：升级断点恢复（pending 原子写 + `--resume`，中断后可续跑或回滚）；
@@ -50,3 +42,9 @@ keywords: [焦点, 交接]
 - v3.8.0：升级引擎真实故障修复（磁盘满显式失败 + temp/mv 原子写，不再截断执行中脚本）；
   lint 增 §15 跨平台底线（CRLF、大小写冲突；Windows 运行时未实测）；
   自测 44/44 → 46/46（44 用例 + 2 元检查）；新增 `checks/test-faults.py`（3 例，无 Docker 时 SKIP）。
+
+## 写回 2026-11-04
+
+- v3.12.0：矩阵引擎格加 3.10.0，install 用例扩为 3.4.11 / 3.5.0（`install_cell` 参数化）；
+  CI 两步把 SKIP 与原因写进 Step Summary，`fetch-depth: 0`；`verify.py` 修跳过重复计数。
+- 门禁：lint 0 fail · 清单 99/0/1（跳过 = 用例 44，macOS 卷特性；Linux 50/50）。
