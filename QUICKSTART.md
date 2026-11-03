@@ -22,7 +22,7 @@ bash <(curl -fsSL https://gitee.com/idcu/keel-starter/raw/main/install.sh) . --w
 ```bash
 bash keel/checks/keel-doctor.sh        # 体检：闭环 / lint / 预算 / 还差你做什么（只读）
 bash keel/checks/keel-lint.sh keel     # 必须 0 fail
-bash keel/checks/test-lint.sh          # 必须 44/44（42 用例 + 2 元检查）
+bash keel/checks/test-lint.sh          # 必须 50/50（48 用例 + 2 元检查）
 ```
 
 第二条验的是**你的仓库合规**；第三条验的是**你手上的 lint 本身是否可信**
