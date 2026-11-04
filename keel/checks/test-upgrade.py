@@ -24,12 +24,17 @@
 依赖：python3（仅测试用）。升级引擎本体只依赖 bash 3.2+ / awk / sed / cp / sha256。
 """
 
+import argparse
+import concurrent.futures as futures
 import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEEL = os.path.dirname(HERE)                     # 待分发的 keel/ 目录（本套件所在的模板）
@@ -123,7 +128,7 @@ def make_target(root, version, drop_retrieval=True):
     p = subprocess.run([BASH, os.path.join(tgt, "keel/checks/keel-upgrade.sh"),
                         "--regen-manifest", os.path.join(tgt, "keel")],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    assert p.returncode == 0, p.stdout.decode("utf-8", "replace")
+    assert_true(p.returncode == 0, p.stdout.decode("utf-8", "replace"))
     return tgt
 
 
@@ -135,7 +140,13 @@ def template_copy(root):
     return tpl
 
 
+_TL = threading.local()
+
+
 def assert_true(cond, msg):
+    # 并行的每个用例跑在自己的线程里，计数也必须线程内独立；全局计数会把
+    # 「这次真的执行了多少断言」变成竞态数据（ADR 0021 的对照表要用它）。
+    _TL.count = getattr(_TL, "count", 0) + 1
     assert cond, msg
 
 
@@ -591,43 +602,77 @@ def t_bootstrap_dry(root):
 
 
 def main():
-    verbose = "-v" in sys.argv or "--verbose" in sys.argv
-    keep = "--keep" in sys.argv
+    ap = argparse.ArgumentParser(description="keel-upgrade 自测")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--jobs", type=int, default=min(4, os.cpu_count() or 1),
+                    help="并行用例数（每个用例有独立临时目录；默认 min(4, CPU)）")
+    ap.add_argument("--out", default="", help="把逐用例断言数/耗时写成 JSON")
+    a = ap.parse_args()
+    verbose, keep, jobs = a.verbose, a.keep, max(1, a.jobs)
     if not os.path.isfile(UPGRADE):
         print("❌ 找不到 %s" % UPGRADE)
         return 1
 
     root = tempfile.mkdtemp(prefix="keel-test-upgrade-")
-    print("keel-upgrade 自测 · 用例 %d 例 · 临时目录 %s" % (len(CASES), root))
+    print("keel-upgrade 自测 · 用例 %d 例 · 并行 %d · 临时目录 %s"
+          % (len(CASES), jobs, root))
     print("=" * 76)
-    ok = bad = 0
-    for name, fn in CASES:
-        case_root = os.path.join(root, "c%02d" % (ok + bad))
+
+    def one(idx_item):
+        idx, (name, fn) = idx_item
+        case_root = os.path.join(root, "c%02d" % idx)
         os.makedirs(case_root, exist_ok=True)
+        _TL.count = 0
+        t0 = time.time()
         try:
             fn(case_root)
-            print("[PASS] %s" % name)
-            ok += 1
+            status, detail = "pass", ""
         except AssertionError as e:
-            print("[FAIL] %s" % name)
-            print("       %s" % str(e).replace("\n", "\n       ")[:1200])
-            bad += 1
+            status, detail = "fail", str(e)
         except Exception as e:      # noqa: BLE001 —— 自测里任何异常都必须报成失败，不能崩
-            print("[FAIL] %s" % name)
-            print("       %s: %s" % (type(e).__name__, e))
-            bad += 1
-        if verbose:
-            print("       （用例目录 %s）" % case_root)
+            status, detail = "fail", "%s: %s" % (type(e).__name__, e)
+        return {"idx": idx, "name": name, "status": status, "detail": detail,
+                "asserts": getattr(_TL, "count", 0),
+                "duration_s": round(time.time() - t0, 1), "root": case_root,
+                "phase": "single-case"}
 
+    t_all = time.time()
+    rows = [None] * len(CASES)
+    with futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+        for res in ex.map(one, list(enumerate(CASES))):
+            rows[res["idx"]] = res
+    for res in rows:
+        if res["status"] == "pass":
+            print("[PASS] %s" % res["name"])
+        else:
+            print("[FAIL] %s" % res["name"])
+            print("       %s" % res["detail"].replace("\n", "\n       ")[:1200])
+        if verbose:
+            print("       （用例目录 %s）" % res["root"])
+
+    ok = sum(1 for r in rows if r["status"] == "pass")
+    bad = len(rows) - ok
+    asserts = sum(r["asserts"] for r in rows)
+    duration = round(time.time() - t_all, 1)
     print("=" * 76)
     if bad == 0:
-        print("✅ 升级自测通过：%d/%d" % (ok, ok + bad))
+        print("✅ 升级自测通过：%d/%d 例 · %d/%d 断言" % (ok, len(rows), asserts, asserts))
     else:
-        print("❌ 升级自测失败：%d 项未通过（共 %d 项）" % (bad, ok + bad))
+        print("❌ 升级自测失败：%d 项未通过（共 %d 项）· %d 断言"
+              % (bad, len(rows), asserts))
     if keep:
         print("   临时目录保留：%s" % root)
     else:
         shutil.rmtree(root, ignore_errors=True)
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as fh:
+            json.dump({"jobs": jobs, "duration_s": duration,
+                       "totals": {"cases": len(rows), "passed": ok, "failed": bad,
+                                  "asserts": asserts},
+                       "cases": [{k: r[k] for k in ("idx", "name", "status",
+                                                    "asserts", "duration_s")}
+                                 for r in rows]}, fh, ensure_ascii=False, indent=1)
     return 1 if bad else 0
 
 

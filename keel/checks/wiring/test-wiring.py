@@ -212,6 +212,7 @@ ENTRANCES = [
     ("E24", "test-faults.py · 判死自检 + 环境分类", "W22", ""),
     ("E25", "release.sh · dry-run 顺序输出（先发布仓后项目仓）", "W23", ""),
     ("E26", "release.sh · 脏树拦截（exit 1）", "W24", ""),
+    ("E27", "release.sh · apply 时两仓 tag 自动推送（先 starter 后项目仓）", "W25", ""),
 ]
 
 CASES = []
@@ -710,6 +711,83 @@ def w24(root):
     return "脏树在 dry-run 阶段即被拦（exit 1）"
 
 
+def _release_apply_fixture(root, mutate=None):
+    """构造可 apply 的两仓 + 两个裸远端；verify 换成秒级 stub，只测推送接线。"""
+    proj = release_fixture(root)
+    sub = os.path.join(proj, "keel-starter")
+    # 发布自检的真实成本是 30 分钟；W25 只关心 tag 有没有被推到项目仓远端。
+    # 用最小合法清单 + no-op 校验器替换，不改 release.sh 的任何分支。
+    write(os.path.join(sub, "keel/checks/verify/verify.sh"),
+          "#!/usr/bin/env bash\n"
+          "out=''\n"
+          "while [ $# -gt 0 ]; do\n"
+          "  case \"$1\" in --out) out=$2; shift ;; esac\n"
+          "  shift\n"
+          "done\n"
+          "[ -n \"$out\" ] && printf '{\"provenance\":{\"commit\":\"fixture\",\"dirty_files\":0}}\\n' > \"$out\"\n"
+          "exit 0\n")
+    write(os.path.join(sub, "keel/checks/verify/check-verify-report.py"),
+          "import sys\nsys.exit(0)\n")
+    _assert(git_commit(sub, "stub verify"), "发布仓 stub 提交失败")
+    sha = git(sub, "rev-parse", "HEAD")[1]
+    rc = subprocess.run(["git", "-C", proj, "update-index", "--add", "--cacheinfo",
+                         "160000,%s,keel-starter" % sha],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _assert(rc.returncode == 0, "无法更新子模块 gitlink")
+    _assert(git_commit(proj, "stub verify pointer"), "项目仓 stub 提交失败")
+    if mutate:
+        p = os.path.join(proj, "scripts/release.sh")
+        src = read(p)
+        new = mutate(src)
+        _assert(new != src, "变异未命中 release.sh")
+        write(p, new)
+        _assert(git_commit(proj, "mutate release"), "变异提交失败")
+
+    ver = re.search(r"(?m)^keel-version:\s*(\S+)", read(os.path.join(sub, "keel/INDEX.md"))).group(1)
+    for r in (sub, proj):
+        rc, _ = git(r, "tag", "-a", "v" + ver, "-m", "t")
+        _assert(rc == 0, "fixture tag 创建失败: %s" % r)
+
+    sub_bare = os.path.join(root, "starter.git")
+    proj_bare = os.path.join(root, "proj.git")
+    for bare in (sub_bare, proj_bare):
+        subprocess.run(["git", "init", "-q", "--bare", bare], check=True)
+    _assert(git(sub, "remote", "add", "origin", sub_bare)[0] == 0, "starter remote 失败")
+    _assert(git(proj, "remote", "add", "origin", proj_bare)[0] == 0, "proj remote 失败")
+    return proj, sub_bare, proj_bare, ver
+
+
+def _release_apply(proj):
+    return sh([BASH, os.path.join(proj, "scripts/release.sh"), "--apply"], cwd=proj)
+
+
+def _remote_tags(bare):
+    return set(git(bare, "tag", "-l")[1].split())
+
+
+def w25(root):
+    proj, sub_bare, proj_bare, ver = _release_apply_fixture(root)
+    rc, out = _release_apply(proj)
+    _assert(rc == 0, "release --apply 应 exit 0，实际 %d\n%s" % (rc, out[-900:]))
+    _contains(out, "✅ 两仓推送完成", "两仓 tag v" + ver)
+    _assert("v" + ver in _remote_tags(sub_bare),
+            "发布仓远端缺 tag v%s：%s" % (ver, _remote_tags(sub_bare)))
+    _assert("v" + ver in _remote_tags(proj_bare),
+            "项目仓远端缺 tag v%s（v3.15.0 的缺口）: %s" % (ver, _remote_tags(proj_bare)))
+    # 负控：把项目仓 push 的 --follow-tags 删掉，同一 fixture 必须让上面的断言变红。
+    # 这里只验证「删逻辑会怎样」；W25 的正控仍以真实脚本为准。
+    root2 = os.path.join(root, "mut")
+    proj2, _, proj2_bare, ver2 = _release_apply_fixture(
+        root2, mutate=lambda s: s.replace(
+            'git -C "$PROJ" push --follow-tags -u origin "$BR_PROJ"',
+            'git -C "$PROJ" push -u origin "$BR_PROJ"'))
+    rc2, out2 = _release_apply(proj2)
+    _assert(rc2 == 0, "变异脚本仍应推送分支成功，实际 %d\n%s" % (rc2, out2[-500:]))
+    _assert("v" + ver2 not in _remote_tags(proj2_bare),
+            "删掉 --follow-tags 后项目仓远端仍有 tag——W25 抓不到该缺陷")
+    return "两仓 tag 均已推送；删掉项目仓 --follow-tags 后负控红"
+
+
 wcase("W01", "keel-lint 四种入参命中同一判据", "E01", w01)
 wcase("W02", "keel-lint 缺目录 exit 2", "E02", w02)
 wcase("W03", "install 全新安装 + 锚点", "E03", w03)
@@ -734,6 +812,7 @@ wcase("W21", "矩阵 current + REG-1 格", "E23", w21)
 wcase("W22", "故障自检与环境分类", "E24", w22)
 wcase("W23", "release dry-run 顺序", "E25", w23)
 wcase("W24", "release 脏树拦截", "E26", w24)
+wcase("W25", "release 两仓 tag 自动推送", "E27", w25)
 
 
 def main():

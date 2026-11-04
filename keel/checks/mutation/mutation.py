@@ -79,7 +79,7 @@ MUTANTS = [
      '  :', ["00", "09"]),
     ("M10", "§9.1-10", "delete_fail",
      '  [ -f "$KEEL_DIR/$need" ] || fail_msg "缺必读文件: $need"',
-     '  :', ["00", "17"]),
+     '  :', ["00", "17", "49", "50"]),
     ("M11", "§9.1-10", "delete_fail",
      '[ "$anchor_ok" -eq 1 ] || fail_msg "点火锚点缺失或与 §4.1 原文不一致（查 CLAUDE.md / AGENTS.md / .cursorrules / .cursor/rules）"',
      ' :', ["00", "21"]),

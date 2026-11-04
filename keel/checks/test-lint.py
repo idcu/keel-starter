@@ -376,6 +376,18 @@ def c17(d):
     os.remove(os.path.join(d, "keel/NOW.md"))
 
 
+# §9.1-10 的必读循环有三个分支（INDEX.md / CONSTITUTION.md / NOW*.md）。
+# 只删 NOW.md 时，前两个分支删掉也不会被任何用例发现（v3.15.0 变异 M10 存活即此因）。
+@case("49", "缺必读文件 INDEX.md", "§9.1-10", ["缺必读文件: INDEX"])
+def c49(d):
+    os.remove(os.path.join(d, "keel/INDEX.md"))
+
+
+@case("50", "缺必读文件 CONSTITUTION.md", "§9.1-10", ["缺必读文件: CONSTITUTION"])
+def c50(d):
+    os.remove(os.path.join(d, "keel/CONSTITUTION.md"))
+
+
 @case("18", "根 INDEX 缺 keel-version", "§9.1-10", ["缺 keel-version"])
 def c18(d):
     sub(d, "keel/INDEX.md", "keel-version: 2.1.0\n", "")
