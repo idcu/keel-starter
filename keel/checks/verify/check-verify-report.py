@@ -124,7 +124,11 @@ def _provenance_problems(prov, repo=None):
                             % (dirty_n, len(actual)))
         for rel in REQUIRED_SHAS:
             want = shas.get(rel)
-            path = os.path.join(repo, rel)
+            # provenance 里的键相对 `keel/`，仓库根的布局是 `<repo>/keel/checks/…`；
+            # 也允许把 keel 目录本身当作 --repo（判据自检用的就是这种扁平 fixture）。
+            path = os.path.join(repo, "keel", rel)
+            if not os.path.isfile(path):
+                path = os.path.join(repo, rel)
             if not os.path.isfile(path):
                 problems.append("被检判据文件不存在：%s" % rel)
             elif want and _sha(path) != want:
