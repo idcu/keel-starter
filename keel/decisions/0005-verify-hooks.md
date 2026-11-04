@@ -1,7 +1,7 @@
 ---
 scope: meta
 status: active
-last-verified: 2026-10-01
+last-verified: 2026-11-03
 keywords: [钩子, 闭环, 验谎, lint]
 type: decision
 created: 2026-10-01
@@ -44,3 +44,37 @@ superseded-by:
 - 代价：**存量仓库升级后会新增一个 fail 面**——若曾把 `checks/hooks/` 删掉或没保留可执行位，lint 会红；
   修复是补回本体并 `chmod +x`（Windows 下建议 `git update-index --chmod=+x`）。
 - 顺带修掉一个真 bug：`install-hooks.sh` / `verify-hooks.sh` 传入相对路径时前缀匹配会失效，已统一归一化。
+
+## 修订 · v3.11.0：验证清单也是「验谎」的对象
+
+同一种失效换了个位置：发布说明可以自述无条件通过，而故障自测 / 跨版本矩阵根本没跑。
+
+- `checks/verify/verify.py` 跑完整套件并写 `verify-report.json`：套件名、`PASS/FAIL/SKIP`、
+  跳过原因、用例数、耗时、环境（平台 / locale / 容器镜像 / 引擎版本）、覆盖的矩阵格；
+  有跳过时汇总输出「未全部覆盖」，不输出无条件通过。
+- `checks/verify/check-verify-report.py` 是判据：套件标 `PASS` 却 `skipped>0` = **伪装 PASS**；
+  含 SKIP/FAIL 时发行说明出现无条件通过即失败；含 SKIP 必须写「X 通过 / Y 跳过（未验证）」。
+  `--selftest` 用 8 个构造样例（含「含 SKIP + 无条件通过」「跳过数写成 0」）证明判据会红。
+- `scripts/release.sh --apply` 推送前跑清单，并用判据校验 `CHANGELOG.md` **当前版本小节**；
+  不一致即中止。历史小节不参与，避免旧文案让本轮变红。
+- 采用方复现：`bash keel/checks/verify/verify.sh --out verify-report.json`。
+- 故障自测环境探测分五态，无 Docker 默认跳过并计入未验证（`exit 0`）；
+  `KEEL_FAULTS_REQUIRE_DOCKER=1` 才变红。理由与本文原文一致：自述不等于事实，
+  但「环境缺能力」也不该伪装成代码失败。
+- 决策落在既有条目而非新增：decisions/ 的 20 文件上限与索引 181B 余额都容不下
+  一条独立 ADR；本条是 0005「验谎」语义的直接延伸。
+
+## 修订 · v3.12.0：绿不能盖住跳过
+
+清单存在了，但若 CI 页面只显示绿，跳过仍等于没发生。
+
+- CI 的 `test-faults` 与跨版本矩阵两步把 `SKIP` 行**连同原因**写进
+  `GITHUB_STEP_SUMMARY`（矩阵用 `grep -A3 "^\[SKIP\]"` 保留原因行）；
+  无该变量时写 `/dev/null`，本地复跑不产生副作用。
+- 矩阵步骤的 `checkout` 必须 `fetch-depth: 0`：浅 clone 取不到历史 tag 会把整格变
+  SKIP，而摘要若不显示原因，页面上就只剩绿色——**缺能力被读成通过**。
+- 判据边界：CI 摘要只是"可见"，不改变退出码；跳过是否放行仍由
+  `KEEL_FAULTS_REQUIRE_DOCKER=1` / 矩阵格自身决定。可见性 ≠ 门禁强度。
+- v3.14.0：清单自身也要绑定到代码——provenance（commit / dirty / 4 文件 sha256）
+  与 `--repo` 校验见 ADR 0002 的对应修订；本条不重复。
+

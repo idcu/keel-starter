@@ -20,6 +20,7 @@
 
 import argparse
 import datetime
+import hashlib
 import json
 import os
 import platform as _platform
@@ -120,6 +121,14 @@ def parse_test_lint(rc, out):
     # 所以打印的 ok **包含**被跳过的用例。清单若照抄 ok，就会把同一个用例既记
     # passed 又记 skipped，总和比实际多 1（v3.12.0 实测：98+0+1 vs 100）。
     # 因此这里减去 skips，并对 cases 不再叠加——passed + failed + skipped == cases。
+    # v3.14.0：元检查用例（META_CASES）进分母后，汇总口径变为
+    # 「N 用例 + M 元检查用例 + 2 元检查」，这里必须同时接受两种写法。
+    m = re.search(r"✅ 自测通过：(\d+)/(\d+)（(\d+) 用例 \+ (\d+) 元检查用例 \+ 2 元检查）", out)
+    if m:
+        ok = int(m.group(1))
+        cases = int(m.group(3)) + int(m.group(4)) + 2
+        return {"passed": ok - len(skips), "failed": 0, "skipped": len(skips),
+                "cases": cases, "reason": reason}
     m = re.search(r"✅ 自测通过：(\d+)/(\d+)（(\d+) 用例 \+ 2 元检查）", out)
     if m:
         ok = int(m.group(1))
@@ -211,6 +220,49 @@ def status_of(rc, parsed):
     return "PASS"
 
 
+CHECK_FILES = ["checks/keel-lint.sh", "checks/test-lint.py",
+               "checks/verify/checks-ledger.py", "checks/verify/verify.py"]
+
+
+def _git(repo, *args):
+    try:
+        p = subprocess.run(["git", "-C", repo] + list(args), stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL)
+        if p.returncode == 0:
+            return p.stdout.decode("utf-8", "replace").strip()
+    except OSError:
+        pass
+    return ""
+
+
+def provenance():
+    """清单位置绑定：commit / dirty / 被检判据文件 sha256 / 平台 / locale / 时间。
+
+    只证明「这份清单是这份代码跑出来的」。不是防篡改——任何人都能伪造一份
+    自洽的清单；没有外部核对时不上升为「可信」，只保证「清单与代码自洽」。
+    选这四个文件：前两个是判据本体，后两个是账本与清单生成器；任一条被改，
+    覆盖结论都可能变。
+    """
+    dirty = [x for x in _git(REPO, "status", "--porcelain").splitlines() if x]
+    shas = {}
+    for rel in CHECK_FILES:
+        path = os.path.join(REPO, rel)
+        if os.path.isfile(path):
+            with open(path, "rb") as fh:
+                shas[rel] = hashlib.sha256(fh.read()).hexdigest()
+        else:
+            shas[rel] = None
+    return {
+        "commit": _git(REPO, "rev-parse", "HEAD") or None,
+        "dirty": bool(dirty),
+        "dirty_files": len(dirty),
+        "checks_sha256": shas,
+        "platform": {"system": sys.platform, "release": _platform.release()},
+        "locale": {k: os.environ.get(k) for k in ("LANG", "LC_ALL", "LC_CTYPE")},
+        "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+
+
 def environment(container_image=None):
     return {
         "platform": sys.platform,
@@ -298,10 +350,11 @@ def main():
         })
         print("[FAIL] checks-ledger    判据账本自身有错（见上方 ❌）")
     else:
-        print("[PASS] %-16s %d/%d 判据有负例（%.1f%%）· %ss"
-              % ("checks-ledger", ledger["totals"]["negative"],
-                 ledger["totals"]["numbered"],
-                 ledger["totals"]["coverage_pct_of_numbered"], ledger_duration))
+        t = ledger["totals"]
+        print("[PASS] %-16s %d/%d（含元检查 %d/%d；仅 §9.1 %d/%d）· %ss"
+              % ("checks-ledger", t["all"]["negative"], t["all"]["denominator"],
+                 t["with_meta"]["negative"], t["with_meta"]["denominator"],
+                 t["negative"], t["numbered"], ledger_duration))
 
     cells = [c for r in rows if "cells" in r for c in r["cells"]]
     total = {
@@ -313,6 +366,7 @@ def main():
         "schema": 1,
         "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "label": a.label or None,
+        "provenance": provenance(),
         "environment": environment(container_image=fault_image),
         "suites": rows,
         "matrix_cells": cells,
@@ -341,11 +395,16 @@ def main():
         print("   发行说明不得写「全部通过 / 全绿」；应为「%d 通过 / %d 跳过（未验证）」"
               % (total["passed"], total["skipped"]))
     if ledger:
-        zeros = [r["id"] for r in ledger["checks"] if r["coverage"] == "none"]
-        print("   判据覆盖：%d/%d 有负例（%.1f%%）· coverage=0: %s"
-              % (ledger["totals"]["negative"], ledger["totals"]["numbered"],
-                 ledger["totals"]["coverage_pct_of_numbered"],
-                 "、".join(zeros) or "无"))
+        t = ledger["totals"]
+        zeros = [r["id"] for r in ledger["checks"] + ledger.get("extras", [])
+                 if r["coverage"] == "none"]
+        print("   判据覆盖：%d/%d（含元检查 %d/%d；仅 §9.1 %d/%d）· coverage=0: %s"
+              % (t["all"]["negative"], t["all"]["denominator"],
+                 t["with_meta"]["negative"], t["with_meta"]["denominator"],
+                 t["negative"], t["numbered"], "、".join(zeros) or "无"))
+    p = report["provenance"]
+    print("   清单绑定：commit %s · dirty %d 个文件 · 4 个判据文件 sha256 已记录 · %s"
+          % ((p["commit"] or "未知")[:12], p["dirty_files"], p["generated_at"]))
     if total["failed"] or (a.strict and total["skipped"]):
         return 1
     return 0

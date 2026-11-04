@@ -179,6 +179,20 @@ def case(cid, name, ref, expect, rc=1):
     return deco
 
 
+# 元检查的判死用例（v3.14.0）：每个元检查必须能证明「输入坏了它会红」。
+# 与 CASES 分开存放：它们构造的是**检查自身的输入**（脚本副本、文档副本、
+# 门面副本），不是故障仓库，不能复用 run_lint 的断言口径。
+# 账本（checks/verify/checks-ledger.py）从这里自动推导覆盖状态。
+META_CASES = []
+
+
+def mcase(mid, name, ref):
+    def deco(fn):
+        META_CASES.append((mid, name, ref, fn))
+        return fn
+    return deco
+
+
 def write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
@@ -555,22 +569,27 @@ def find_doc():
     return None
 
 
-def check_doc_consistency():
-    """随仓库发布的 keel-lint.sh 必须与 DESIGN.md §9.3 逐字一致。"""
-    doc = find_doc()
+def check_doc_consistency(script=None, doc=None):
+    """随仓库发布的 keel-lint.sh 必须与 DESIGN.md §9.3 逐字一致。
+
+    v3.14.0：script / doc 可注入——元检查也要有判死用例，否则「它会不会红」
+    只能靠相信。默认值仍是真实路径。
+    """
+    doc = doc if doc is not None else find_doc()
+    script = script or LINT
     if not doc:
         return None, "未找到 DESIGN.md（发布版 starter 里正常）"
     text = open(doc, encoding="utf-8").read()
     for block in re.findall(r"```bash\n(.*?)```", text, re.S):
         if block.startswith("#!/usr/bin/env bash"):
-            shipped = open(LINT, encoding="utf-8").read()
+            shipped = open(script, encoding="utf-8").read()
             if block.rstrip("\n") == shipped.rstrip("\n"):
                 return True, "与 DESIGN.md §9.3 逐字一致"
             return False, "与 DESIGN.md §9.3 不一致——改了脚本请同步文档，反之亦然"
     return False, "DESIGN.md 里找不到 §9.3 的脚本代码块"
 
 
-def check_locale_isolation(base):
+def check_locale_isolation(base, script=None):
     """判死 locale 泄漏：段 3 的 LC_ALL 不得泄漏成持久变量影响段 4。
 
     两个判据（行为 + 结构）：
@@ -580,13 +599,15 @@ def check_locale_isolation(base):
     ② 结构：脚本里不得出现 `LC_ALL=C <var>=...;` 形式的泄漏赋值
        （LC_ALL 必须作为命令前缀，如 `LC_ALL=C xrun`）。
     见坑 bash3-utf8-varname-eats-byte / 设计稿 §9.1-8。
+    v3.14.0：script 可注入，供判死用例使用。
     """
     bash = shutil.which("bash") or "bash"
+    script = script or LINT
     # ① 行为：UTF-8 locale 下合法基线不应有「命名含大写」
     env = dict(os.environ)
     env["LC_ALL"] = "zh_CN.UTF-8"
     env["LANG"] = "zh_CN.UTF-8"
-    p = subprocess.run([bash, LINT, "keel"], cwd=base,
+    p = subprocess.run([bash, script, "keel"], cwd=base,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     out = p.stdout.decode("utf-8", "replace")
     false_upper = [l for l in out.splitlines() if "命名含大写" in l]
@@ -595,7 +616,7 @@ def check_locale_isolation(base):
                        "段 4 glob 非 locale 无关或段 3 泄漏已失: %s"
                        % (len(false_upper), false_upper[0][:80]))
     # ② 结构：不得有泄漏形式 `LC_ALL=C VAR=...;`（排除注释行）
-    src = open(LINT, encoding="utf-8").read()
+    src = open(script, encoding="utf-8").read()
     code_lines = [l for l in src.splitlines() if not l.lstrip().startswith("#")]
     code = "\n".join(code_lines)
     leaks = re.findall(r"LC_ALL=C\s+[A-Za-z_][A-Za-z0-9_]*=", code)
@@ -637,7 +658,7 @@ def check_invoke_forms(base):
     return True, "相对 / 绝对 / '.' / 空格+中文 四种入参形式均 0 fail"
 
 
-def check_prose_numbers():
+def check_prose_numbers(idx=None, readme=None, doc=None, cases_n=None, meta_n=None):
     """门面散文里的版本号与自测数字必须与真源一致（ADR 0018）。
 
     为什么需要它：徽章与 §9.3 代码块有机器守（§9.1-17 / DOC 检查），但
@@ -645,26 +666,30 @@ def check_prose_numbers():
     没有任何判据——2026-11-02 评估实测漂了 12 处（39/39、41 例、42/42、v3.4.6），
     正是 Lint Leakage 在自家文档上的复现。手改只能补这一版，判据才能拦住下一版。
 
-    真源：用例数 = len(CASES)（总分母 +2 元检查：NOISE / INVOKE）；版本 = keel/INDEX.md 的 keel-version。
+    真源：用例数 = len(CASES)，元检查用例 = len(META_CASES)，总分母再 +2
+    （NOISE / INVOKE）；版本 = keel/INDEX.md 的 keel-version。
     目标：仓根 README.md + DESIGN.md（存在才查）——只守门面，docs/、pitfalls/
     等历史叙述密集区不在覆盖内。
     豁免：行内带 vX.Y.Z（≠当前版本）的比分/用例断言视为历史叙述，不判——
     写作约定由此成立：**讲历史必须带当时版本号**。
+    v3.14.0：路径与计数可注入，供判死用例使用。
     """
-    idx = os.path.join(os.path.dirname(HERE), "INDEX.md")
+    idx = idx if idx is not None else os.path.join(os.path.dirname(HERE), "INDEX.md")
     ver = None
     if os.path.isfile(idx):
         m = re.search(r"(?m)^keel-version:\s*(\d+\.\d+\.\d+)",
                       open(idx, encoding="utf-8").read())
         ver = m.group(1) if m else None
-    cases_n = len(CASES)      # 全集，不受 --only 子集影响
-    total = cases_n + 2       # +2 = NOISE / INVOKE 元检查
+    cases_n = len(CASES) if cases_n is None else cases_n       # 全集，不受 --only 子集影响
+    meta_n = len(META_CASES) if meta_n is None else meta_n
+    total = cases_n + meta_n + 2    # +2 = NOISE / INVOKE 元检查
     targets = []
-    rd = os.path.join(os.path.dirname(os.path.dirname(HERE)), "README.md")
+    rd = readme if readme is not None else os.path.join(
+        os.path.dirname(os.path.dirname(HERE)), "README.md")
     if os.path.isfile(rd):
         targets.append(rd)
-    doc = find_doc()
-    if doc:
+    doc = doc if doc is not None else find_doc()
+    if doc and os.path.isfile(doc):
         targets.append(doc)
     if not targets or not ver:
         return None, "缺 README/DESIGN 或 keel-version（非发行仓布局，跳过）"
@@ -711,8 +736,8 @@ def check_prose_numbers():
                                % (os.path.basename(path), ln, m.group(1), cases_n))
     if bad:
         return False, "%d 处漂移，例：%s" % (len(bad), bad[0])
-    return True, "README/DESIGN 散文数字与真源一致（版本 %s · %d 用例 + 2 元检查）" \
-                 % (ver, cases_n)
+    return True, "README/DESIGN 散文数字与真源一致（版本 %s · %d 用例 + %d 元检查用例 + 2 元检查）" \
+                 % (ver, cases_n, meta_n)
 
 
 @case("33", "frontmatter 行内注释（YAML 语义）", "§6.1", [], rc=0)
@@ -740,6 +765,44 @@ def c35(d):
           "type: exception   # 冻结期例外才改\n"
           "superseded-by:   # 占位注释，值整行是注释\n"
           "---\n# 模板\n")
+
+
+@mcase("§9.3-DOC", "脚本与 DESIGN §9.3 差一个字节", "§9.3-DOC")
+def m01(d):
+    shipped = open(LINT, encoding="utf-8").read()
+    broken = shipped.replace("fail=0", "fail=9", 1)
+    assert broken != shipped, "注入失败（未找到锚点）"
+    doc = os.path.join(d, "DESIGN.md")
+    write(doc, "# 设计稿\n\n## 9.3 keel-lint.sh\n\n```bash\n" + broken + "```\n")
+    ok, msg = check_doc_consistency(script=LINT, doc=doc)
+    return (ok is False), msg
+
+
+@mcase("§9.3-LOCALE", "LC_ALL 泄漏赋值（应为命令前缀）", "§9.3-LOCALE")
+def m02(d):
+    shipped = open(LINT, encoding="utf-8").read()
+    assert "set -uo pipefail" in shipped, "注入失败（未找到锚点）"
+    broken = shipped.replace("set -uo pipefail",
+                             "set -uo pipefail\nLC_ALL=C LANG=en_US.UTF-8", 1)
+    script = os.path.join(d, "keel-lint.sh")
+    write(script, broken)
+    ok, msg = check_locale_isolation(d, script=script)
+    return (ok is False), msg
+
+
+@mcase("§9.3-PROSE", "README 的 --ref 指向旧版本", "§9.3-PROSE")
+def m03(d):
+    write(os.path.join(d, "keel", "INDEX.md"),
+          "---\nscope: meta\nstatus: active\nlast-verified: 2026-01-01\n"
+          "keywords: [索引]\nkeel-version: 1.2.3\nproject-state: building\n---\n# INDEX\n")
+    readme = os.path.join(d, "README.md")
+    write(readme, "安装：bash keel/checks/install.sh --ref v1.0.0\n")
+    doc = os.path.join(d, "DESIGN.md")
+    write(doc, "# 设计稿\n")
+    ok, msg = check_prose_numbers(
+        idx=os.path.join(d, "keel", "INDEX.md"), readme=readme, doc=doc,
+        cases_n=len(CASES), meta_n=len(META_CASES))
+    return (ok is False), msg
 
 
 def main():
@@ -899,12 +962,28 @@ def main():
         if not prose_ok:
             bad += 1
 
+    # ---------- 元检查的判死用例（v3.14.0）----------
+    # 为什么必须有：DOC / LOCALE / PROSE 此前只跑「干净输入」，从没有反例——
+    # 「它会不会红」只能靠相信。账本因此把它们记为 coverage=none，分母之外。
+    # 这里给每条元检查一个坏输入，红不了就是用例构造失败，不是检查有效。
+    for mid, name, ref, fn in META_CASES:
+        mdst = os.path.join(root, "meta-" + mid.replace("§", "s").replace(".", "_"))
+        os.makedirs(mdst, exist_ok=True)
+        try:
+            m_ok, m_msg = fn(mdst)
+        except Exception as e:   # 构造失败也算没通过：吞掉异常等于伪造覆盖
+            m_ok, m_msg = False, "构造失败：%s" % e
+        print("[%s] %-12s %-32s %s" % ("PASS" if m_ok else "FAIL", mid, name, m_msg))
+        ok += m_ok
+        bad += not m_ok
+
     print("=" * 76)
-    # 分母要说清：cases 是故障注入用例，NOISE 是元检查（ADR 0014）——
-    # 两者都算"检查"，但不同类，混在一个分母里会让人误读成"多了 1 个用例"。
-    total = len(cases) + 2   # +2 = NOISE / INVOKE 元检查
+    # 分母要说清：cases 是故障注入用例，META_CASES 是元检查的判死用例，
+    # NOISE / INVOKE 是行为检查——三类都算"检查"，但不同类，混在一起会误读。
+    total = len(cases) + len(META_CASES) + 2   # +2 = NOISE / INVOKE 元检查
     if bad == 0:
-        print("✅ 自测通过：%d/%d（%d 用例 + 2 元检查）" % (ok, total, len(cases)))
+        print("✅ 自测通过：%d/%d（%d 用例 + %d 元检查用例 + 2 元检查）"
+              % (ok, total, len(cases), len(META_CASES)))
     else:
         print("❌ 自测失败：%d 项未通过（共 %d 项）" % (bad, total))
     if keep:
