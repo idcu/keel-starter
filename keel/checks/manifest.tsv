@@ -1,4 +1,4 @@
-# keel-manifest v1 version=3.12.0 generated=2026-11-04
+# keel-manifest v1 version=3.13.0 generated=2026-11-04
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455
@@ -22,8 +22,9 @@ kernel	checks/test-upgrade.sh	755	7212b8881d058e0d36981e51dc2622d06f42bc2d64e2bc
 kernel	checks/test-upgrade.py	644	1a179e2b433a3404ece75228ac9bef68bbc298e20da65b37233195f1094bc40f
 kernel	checks/matrix/test-upgrade-matrix.sh	755	16d720da56a7c5d247cd59faffd86fceb6f1a1bfe3f90ef3170f62a5e5533fa0
 kernel	checks/matrix/test-upgrade-matrix.py	644	c525374c52b633da5299cd57a3f94ba983078ec3348e21c6d1767ce566e189b0
-kernel	checks/verify/check-verify-report.py	644	c63e59e8884e93b3bb4280376cba1193a4c786153f7c555901ae7f8f9ec3e653
-kernel	checks/verify/verify.py	644	4f04631311aae67537d74e3679cb97fa917e860b94e1e780eb740fea54e08950
+kernel	checks/verify/check-verify-report.py	644	4d0ffb3b30b6eaca366c226a3ea002fa54b983576ff95ed3c22e7802ab047069
+kernel	checks/verify/checks-ledger.py	644	7921296a576bc6a16929eef9c9da92b58b2084323fba624a1ccb60035fd50f83
+kernel	checks/verify/verify.py	644	e6a4797468435014d29ecbd2d0839ff3f4988c6d72af32bfee683711b7199a54
 kernel	checks/verify/verify.sh	755	cbf0168723b0eaeb304cf44b2b4430c29f26436a3147501584c1f651e081ae2a
 kernel	checks/hooks/pre-commit	755	9920408d87c4f72d9d4b89a5b8ddd9102b63eb9318fa1c6dc05677fff908c56b
 kernel	checks/hooks/commit-msg	755	f87ae2a27c611999aa7ec294f13c2cf5049238967e465d9118bc40a667256a6b

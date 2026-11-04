@@ -59,6 +59,58 @@ def scope_section(text, version):
     return "\n".join(lines[start:end])
 
 
+def _ledger_problems(ledger):
+    """校验判据覆盖率账本的内部自洽（分子/分母/三档必须能对上）。"""
+    if not isinstance(ledger, dict):
+        return ["清单缺少 checks_ledger 小节（判据覆盖率账本）"]
+    checks = ledger.get("checks")
+    totals = ledger.get("totals") or {}
+    if not isinstance(checks, list) or not checks:
+        return ["checks_ledger.checks 为空或不是数组"]
+    problems = []
+    ids = [c.get("id") for c in checks]
+    if len(set(ids)) != len(ids):
+        problems.append("checks_ledger 判据编号重复")
+    n = totals.get("numbered")
+    if n != len(checks):
+        problems.append("checks_ledger.numbered=%s 与判据条数=%d 不一致" % (n, len(checks)))
+    neg = totals.get("negative")
+    pos = totals.get("positive_only")
+    none = totals.get("none")
+    if None in (neg, pos, none):
+        problems.append("checks_ledger.totals 缺 negative/positive_only/none")
+    elif neg + pos + none != n:
+        problems.append("checks_ledger 三档之和 %d+%d+%d != %s" % (neg, pos, none, n))
+    recount = {"negative": 0, "positive_only": 0, "none": 0}
+    for c in checks:
+        cov = c.get("coverage")
+        cases = c.get("cases") or 0
+        negc = c.get("negative_cases") or 0
+        if cov not in recount:
+            problems.append("checks_ledger 非法 coverage=%s（%s）" % (cov, c.get("id")))
+            continue
+        recount[cov] += 1
+        if cov == "negative" and negc == 0:
+            problems.append("checks_ledger %s 标 negative 但 negative_cases=0" % c.get("id"))
+        if cov == "positive_only" and (negc != 0 or cases == 0):
+            problems.append("checks_ledger %s 标 positive_only 但负例=%d/用例=%d"
+                            % (c.get("id"), negc, cases))
+        if cov == "none" and cases != 0:
+            problems.append("checks_ledger %s 标 none 但有用例=%d" % (c.get("id"), cases))
+    if None not in (neg, pos, none) and recount != {"negative": neg, "positive_only": pos, "none": none}:
+        problems.append("checks_ledger 三档计数与判据条目不重合")
+    implemented = totals.get("implemented")
+    extension = totals.get("extension")
+    if implemented is not None and extension is not None and implemented + extension != n:
+        problems.append("checks_ledger implemented+extension != numbered")
+    pct = totals.get("coverage_pct_of_numbered")
+    if n and pct is not None and abs(pct - round((neg or 0) * 100.0 / n, 1)) > 0.05:
+        problems.append("checks_ledger coverage_pct 与 %d/%s 不符" % (neg or 0, n))
+    for e in ledger.get("errors") or []:
+        problems.append("checks_ledger 自身报错：%s" % e)
+    return problems
+
+
 def check(report, text, version=None):
     """返回问题列表；空列表 = 通过。"""
     problems = []
@@ -76,6 +128,8 @@ def check(report, text, version=None):
                             % (s.get("name"), s.get("skipped")))
         if s.get("status") == "SKIP" and not s.get("skip_reason"):
             problems.append("套件 %s 标记 SKIP 却没有跳过原因" % s.get("name"))
+
+    problems.extend(_ledger_problems(_get(report, "checks_ledger")))
 
     body = scope_section(text, version)
     low = body.lower()
@@ -120,6 +174,13 @@ def summary(report):
         lines.append("- 矩阵并行度：%s" % env["matrix_jobs"])
     lines.append("- 结果：%d 通过 / %d 失败 / %d 跳过（未验证）"
                  % (total.get("passed", 0), total.get("failed", 0), total.get("skipped", 0)))
+    led = report.get("checks_ledger") or {}
+    lt = led.get("totals") or {}
+    if lt.get("numbered"):
+        zeros = [c.get("id") for c in led.get("checks") or [] if c.get("coverage") == "none"]
+        lines.append("- 判据覆盖：%d/%d 有负例（%.1f%%）· coverage=0: %s"
+                     % (lt.get("negative", 0), lt["numbered"],
+                        lt.get("coverage_pct_of_numbered", 0), "、".join(zeros) or "无"))
     lines.append("- 套件：")
     for s in _get(report, "suites", []) or []:
         extra = ""
@@ -146,6 +207,17 @@ def _mk_report(statuses, skipped, failed=0):
     suites[0]["skipped"] = skipped
     return {"schema": 1, "environment": {"engine_version": "9.9.9", "platform": "test"},
             "suites": suites,
+            "checks_ledger": {
+                "totals": {"numbered": 2, "implemented": 1, "extension": 1,
+                           "negative": 1, "positive_only": 0, "none": 1,
+                           "coverage_pct_of_numbered": 50.0,
+                           "coverage_pct_of_implemented": 100.0},
+                "checks": [
+                    {"id": "§9.1-1", "coverage": "negative", "cases": 1, "negative_cases": 1},
+                    {"id": "§9.1-15", "coverage": "none", "cases": 0, "negative_cases": 0},
+                ],
+                "auxiliary": [], "meta": [], "errors": [],
+            },
             "summary": {"passed": 9, "failed": failed, "skipped": skipped,
                         "verified": skipped == 0 and failed == 0}}
 
@@ -155,6 +227,12 @@ def selftest():
     ok_report = _mk_report([("PASS", "PASS"), ("lint", "PASS")], 0)
     fake_report = _mk_report([("PASS", "PASS"), ("lint", "PASS")], 2)
     fail_report = _mk_report([("PASS", "PASS")], 0, failed=1)
+    ledger_sum = _mk_report([("PASS", "PASS")], 0)
+    ledger_sum["checks_ledger"]["totals"]["none"] = 0
+    ledger_neg = _mk_report([("PASS", "PASS")], 0)
+    ledger_neg["checks_ledger"]["checks"][0]["negative_cases"] = 0
+    ledger_missing = _mk_report([("PASS", "PASS")], 0)
+    ledger_missing.pop("checks_ledger")
     fixtures = [
         ("含 SKIP + 「全部通过」必须被抓", skip_report, "全部通过", False),
         ("含 SKIP + 「全部通过」英文变体必须被抓", skip_report, "All green", False),
@@ -168,6 +246,9 @@ def selftest():
         ("含 SKIP 却把跳过数写成 0 必须被抓", skip_report,
          "9 通过 / 0 跳过（未验证）", False),
         ("有 FAIL 却写「全部通过」必须被抓", fail_report, "全部通过", False),
+        ("账本三档之和不等必须被抓", ledger_sum, "全部通过", False),
+        ("账本标 negative 但负例为 0 必须被抓", ledger_neg, "全部通过", False),
+        ("缺 checks_ledger 小节必须被抓", ledger_missing, "全部通过", False),
     ]
     bad = 0
     for name, report, claims, expect_ok in fixtures:

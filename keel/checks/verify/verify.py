@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -54,7 +55,9 @@ def _shipable(keel_dir):
         return False
 
 
-KEEL = _find_keel(HERE)
+KEEL_ORIG = _find_keel(HERE)
+PROJECT_REPO = os.path.dirname(KEEL_ORIG)
+KEEL = KEEL_ORIG
 if not _shipable(KEEL):
     _sib = os.path.normpath(os.path.join(KEEL, "..", "keel-starter", "keel"))
     if _shipable(_sib):
@@ -64,11 +67,13 @@ REPO = os.path.dirname(KEEL)
 BASH = shutil.which("bash") or "bash"
 PY = sys.executable
 
-ALL_SUITES = ["claims-selftest", "lint", "manifest", "test-lint",
+ALL_SUITES = ["claims-selftest", "checks-ledger", "lint", "manifest", "test-lint",
               "test-upgrade", "test-faults", "matrix"]
 
 SUITE_CMD = {
     "claims-selftest": [PY, "keel/checks/verify/check-verify-report.py", "--selftest"],
+    "checks-ledger": [PY, "keel/checks/verify/checks-ledger.py", "--selftest",
+                      "--cases", os.path.join(KEEL, "checks", "test-lint.py")],
     "lint": [BASH, "keel/checks/keel-lint.sh", "keel"],
     "manifest": [BASH, "keel/checks/keel-upgrade.sh", "--check-manifest", "keel"],
     "test-lint": [BASH, "keel/checks/test-lint.sh"],
@@ -186,6 +191,7 @@ def parse_selftest(rc, out):
 
 PARSERS = {
     "claims-selftest": parse_selftest,
+    "checks-ledger": parse_selftest,
     "lint": parse_gate,
     "manifest": parse_gate,
     "test-lint": parse_test_lint,
@@ -257,10 +263,45 @@ def main():
         }
         if "cells" in parsed:
             row["cells"] = parsed["cells"]
+        if st == "FAIL":
+            # 失败必须留证据：转录最后 12 行，否则「lint 失败」只有状态没有原因。
+            row["output_tail"] = "\n".join(out.strip().splitlines()[-12:])
         rows.append(row)
         print("[%-4s] %-16s %d 通过 / %d 失败 / %d 跳过 · %ss%s"
               % (st, name, row["passed"], row["failed"], row["skipped"], duration,
                  (" · " + reason) if reason else ""))
+
+    # 判据覆盖账本：与套件同一次运行，避免「清单说 18/19、实际用例已删」的错位。
+    # 用 --out 而不是 --json：run() 合并 stderr，JSON 里混一行 ❌ 就会解析失败。
+    fd, ledger_path = tempfile.mkstemp(prefix="keel-ledger-", suffix=".json")
+    os.close(fd)
+    ledger_cmd = [PY, "keel/checks/verify/checks-ledger.py", "--out", ledger_path,
+                  "--cases", os.path.join(KEEL, "checks", "test-lint.py")]
+    design = os.path.join(PROJECT_REPO, "DESIGN.md")
+    if os.path.exists(design):
+        ledger_cmd += ["--design", design]
+    t0 = time.time()
+    ledger_rc, _ = run(ledger_cmd)
+    ledger_duration = round(time.time() - t0, 1)
+    ledger = None
+    try:
+        with open(ledger_path, encoding="utf-8") as fh:
+            ledger = json.load(fh)
+    except (OSError, ValueError):
+        ledger = None
+    os.unlink(ledger_path)
+    if ledger_rc != 0 or ledger is None:
+        rows.append({
+            "name": "checks-ledger-data", "status": "FAIL", "skip_reason": None,
+            "cases": 1, "passed": 0, "failed": 1, "skipped": 0,
+            "duration_s": ledger_duration,
+        })
+        print("[FAIL] checks-ledger    判据账本自身有错（见上方 ❌）")
+    else:
+        print("[PASS] %-16s %d/%d 判据有负例（%.1f%%）· %ss"
+              % ("checks-ledger", ledger["totals"]["negative"],
+                 ledger["totals"]["numbered"],
+                 ledger["totals"]["coverage_pct_of_numbered"], ledger_duration))
 
     cells = [c for r in rows if "cells" in r for c in r["cells"]]
     total = {
@@ -275,6 +316,7 @@ def main():
         "environment": environment(container_image=fault_image),
         "suites": rows,
         "matrix_cells": cells,
+        "checks_ledger": ledger,
         "summary": {
             "passed": total["passed"],
             "failed": total["failed"],
@@ -298,6 +340,12 @@ def main():
     if total["skipped"]:
         print("   发行说明不得写「全部通过 / 全绿」；应为「%d 通过 / %d 跳过（未验证）」"
               % (total["passed"], total["skipped"]))
+    if ledger:
+        zeros = [r["id"] for r in ledger["checks"] if r["coverage"] == "none"]
+        print("   判据覆盖：%d/%d 有负例（%.1f%%）· coverage=0: %s"
+              % (ledger["totals"]["negative"], ledger["totals"]["numbered"],
+                 ledger["totals"]["coverage_pct_of_numbered"],
+                 "、".join(zeros) or "无"))
     if total["failed"] or (a.strict and total["skipped"]):
         return 1
     return 0
