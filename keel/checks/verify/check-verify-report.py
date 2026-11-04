@@ -225,8 +225,13 @@ def _ledger_problems(ledger):
     return problems
 
 
-def check(report, text, version=None, repo=None):
-    """返回问题列表；空列表 = 通过。"""
+def structure_problems(report, repo=None):
+    """清单自身的自洽性（与发行说明无关的那一半）：汇总 / 账本 / provenance。
+
+    单独拆出来是因为「只给 --repo 不给 --claims」也必须能判死——v3.14.0 首版把
+    provenance 校验写在 claims 循环里，于是 `--report x --repo y` 不带 claims 时
+    静默 exit 0：判据存在、但没有被调用，正是「看起来有检查」的假判据。
+    """
     problems = []
     suites = _get(report, "suites", []) or []
     total_skipped = _get(report, "summary.skipped")
@@ -245,6 +250,17 @@ def check(report, text, version=None, repo=None):
 
     problems.extend(_ledger_problems(_get(report, "checks_ledger")))
     problems.extend(_provenance_problems(_get(report, "provenance"), repo))
+    return problems
+
+
+def check(report, text, version=None, repo=None):
+    """返回问题列表；空列表 = 通过。"""
+    problems = structure_problems(report, repo)
+    total_skipped = _get(report, "summary.skipped")
+    total_failed = _get(report, "summary.failed", 0) or 0
+    if total_skipped is None:
+        total_skipped = sum(int(s.get("skipped", 0) or 0)
+                            for s in (_get(report, "suites", []) or []))
 
     body = scope_section(text, version)
     low = body.lower()
@@ -433,6 +449,7 @@ def selftest():
         print("[SKIP] 无 git / 判据文件缺失，跳过 provenance 的 4 条判死用例（不计入分母）")
 
     bad = 0
+    total_cases = len(fixtures)
     for fx in fixtures:
         name, report, claims, expect_ok = fx[:4]
         repo_arg = fx[4] if len(fx) > 4 else None
@@ -442,10 +459,33 @@ def selftest():
                              "" if ok else " → " + "；".join(got)))
         if not ok:
             bad += 1
+
+    # CLI 级：只给 --repo 不带 --claims 时也必须判死。
+    # 函数级用例测不到这层——首版就栽在这里：check() 是对的，但 main() 只在
+    # claims 循环里调它，于是 `--report x --repo y` 静默 exit 0（假判据）。
+    if repo_ok:
+        for name, rep, rp, want in (
+                ("CLI 只给 --repo：一致必须放行", prov_ok, repo_ok, 0),
+                ("CLI 只给 --repo：commit 不符必须判死", prov_commit, repo_commit, 1),
+                ("CLI 只给 --repo：自称干净但仓库脏必须判死", prov_dirty, repo_dirty, 1)):
+            fd, tmp = tempfile.mkstemp(suffix=".json")
+            os.close(fd)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(rep, fh, ensure_ascii=False)
+            got = subprocess.run([sys.executable, __file__, "--report", tmp,
+                                  "--repo", rp], stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL).returncode
+            ok = got == want
+            print("[%s] %s" % ("PASS" if ok else "FAIL", name))
+            if not ok:
+                bad += 1
+            os.remove(tmp)
+        total_cases += 3
+
     for d in _prov_cleanup:
         shutil.rmtree(d, ignore_errors=True)
     _prov_cleanup[:] = []
-    print("%s：判据自检 %d/%d" % ("✅" if not bad else "❌", len(fixtures) - bad, len(fixtures)))
+    print("%s：判据自检 %d/%d" % ("✅" if not bad else "❌", total_cases - bad, total_cases))
     return 1 if bad else 0
 
 
@@ -518,6 +558,15 @@ def main():
         report = json.load(fh)
     version = (_get(report, "environment.engine_version") or "")
     rc = 0
+    # 不带 --claims 时也必须校验清单自身（含 provenance）：判据不能只在某条
+    # 调用路径上生效，否则 `--report x --repo y` 会静默绿。
+    if not claims:
+        problems = structure_problems(report, repo)
+        if problems:
+            rc = 1
+            print("❌ 清单自身不自洽，或 provenance 与仓库不一致：")
+            for p in problems:
+                print("   - " + p)
     if show_summary or not claims:
         print(summary(report))
     for path in claims:
