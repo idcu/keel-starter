@@ -69,7 +69,7 @@ BASH = shutil.which("bash") or "bash"
 PY = sys.executable
 
 ALL_SUITES = ["claims-selftest", "checks-ledger", "lint", "manifest", "test-lint",
-              "test-upgrade", "test-faults", "matrix"]
+              "test-upgrade", "test-faults", "matrix", "wiring"]
 
 SUITE_CMD = {
     "claims-selftest": [PY, "keel/checks/verify/check-verify-report.py", "--selftest"],
@@ -81,6 +81,8 @@ SUITE_CMD = {
     "test-upgrade": [BASH, "keel/checks/test-upgrade.sh"],
     "test-faults": [PY, "keel/checks/test-faults.py"],
     "matrix": [PY, "keel/checks/matrix/test-upgrade-matrix.py"],
+    # wiring 需要动态 --out 路径，main() 里单独构造；这条只用于参数校验/提示。
+    "wiring": [PY, "keel/checks/wiring/test-wiring.py"],
 }
 
 
@@ -192,6 +194,24 @@ def parse_matrix(rc, out):
             "cells": cells}
 
 
+WIRING_RE = re.compile(
+    r"(✅|❌) 接线自测(?:通过|失败)：(\d+)/(\d+) 入口有判死用例 · (\d+)/(\d+) 用例通过 · wiring=0: ([^·]+?)(?: ·|\n|$)")
+
+
+def parse_wiring(rc, out):
+    """接线矩阵的汇总行；wiring=0 的入口按 SKIP（未验证）计，不许当 PASS。"""
+    m = WIRING_RE.search(out)
+    if not m:
+        return {"passed": 0, "failed": 1, "skipped": 0, "cases": 0,
+                "reason": "无法解析接线审计汇总输出"}
+    with_neg, ent, cp, ct = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+    zero = m.group(6).strip()
+    zeros = [] if zero in ("无", "") else [z.strip() for z in zero.split("、")]
+    return {"passed": with_neg, "failed": 0, "skipped": len(zeros),
+            "cases": ent, "reason": ("wiring=0: " + "、".join(zeros)) if zeros else "",
+            "wiring_zero": zeros}
+
+
 def parse_selftest(rc, out):
     p = len(re.findall(r"^\[PASS\]", out, re.M))
     f = len(re.findall(r"^\[FAIL\]", out, re.M))
@@ -207,6 +227,7 @@ PARSERS = {
     "test-upgrade": parse_test_upgrade,
     "test-faults": parse_faults,
     "matrix": parse_matrix,
+    "wiring": parse_wiring,
 }
 
 
@@ -293,9 +314,23 @@ def main():
     print("=" * 76)
     rows = []
     fault_image = None
+    wiring = None
     for name in suites:
         t0 = time.time()
-        rc, out = run(SUITE_CMD[name])
+        if name == "wiring":
+            # 接线矩阵要进清单（入口 / 有无判死用例 / 用例编号 / wiring=0），
+            # 所以这一套用 --out 取结构化结果；其余套件只解析 stdout。
+            fd, wpath = tempfile.mkstemp(prefix="keel-wiring-", suffix=".json")
+            os.close(fd)
+            rc, out = run([PY, "keel/checks/wiring/test-wiring.py", "--out", wpath])
+            try:
+                with open(wpath, encoding="utf-8") as fh:
+                    wiring = json.load(fh)
+            except (OSError, ValueError):
+                wiring = None
+            os.unlink(wpath)
+        else:
+            rc, out = run(SUITE_CMD[name])
         duration = round(time.time() - t0, 1)
         if name == "test-faults":
             m = re.search(r"镜像 (\S+)", out)
@@ -356,6 +391,37 @@ def main():
                  t["with_meta"]["negative"], t["with_meta"]["denominator"],
                  t["negative"], t["numbered"], ledger_duration))
 
+    # 变异测试试点（§9.1）：结果进清单，但**不进门禁**——低分是结论，不是失败。
+    # 若把「有变异体存活」判成 FAIL，就等于逼下一轮删掉难杀的变异体来抬分。
+    # 只在完整清单（含 wiring）里跑；`--suites lint` 这类子集不背这 1 分钟。
+    mutation = None
+    if "wiring" in suites:
+        fd, mpath = tempfile.mkstemp(prefix="keel-mutation-", suffix=".json")
+        os.close(fd)
+        mt0 = time.time()
+        mrc, mout = run([PY, "keel/checks/mutation/mutation.py", "--out", mpath],
+                        timeout=600)
+        try:
+            with open(mpath, encoding="utf-8") as fh:
+                mutation = json.load(fh)
+        except (OSError, ValueError):
+            mutation = None
+        os.unlink(mpath)
+    if "wiring" in suites and mutation is None:
+        rows.append({
+            "name": "mutation-data", "status": "FAIL", "skip_reason": None,
+            "cases": 1, "passed": 0, "failed": 1, "skipped": 0,
+            "duration_s": round(time.time() - mt0, 1),
+        })
+        print("[FAIL] mutation        变异试点未产出可解析的 JSON（见上方 ❌）")
+    elif "wiring" in suites:
+        mt = mutation["totals"]
+        print("[INFO] %-16s %d/%d 被杀 · 存活 %d · %.1fs（不计门禁）"
+              % ("mutation", mt["killed"], mt["mutants"], mt["survived"],
+                 mutation["duration_s"]))
+        if mrc == 2:
+            print("      ⚠️  变异试点基线不绿（结论不可用）")
+
     cells = [c for r in rows if "cells" in r for c in r["cells"]]
     total = {
         "passed": sum(r["passed"] for r in rows),
@@ -371,6 +437,8 @@ def main():
         "suites": rows,
         "matrix_cells": cells,
         "checks_ledger": ledger,
+        "wiring": wiring,
+        "mutation": mutation,
         "summary": {
             "passed": total["passed"],
             "failed": total["failed"],
@@ -394,6 +462,15 @@ def main():
     if total["skipped"]:
         print("   发行说明不得写「全部通过 / 全绿」；应为「%d 通过 / %d 跳过（未验证）」"
               % (total["passed"], total["skipped"]))
+    if wiring:
+        wt = wiring["totals"]
+        print("   接线覆盖：%d/%d 入口有判死用例 · 用例 %d/%d · wiring=0: %s"
+              % (wt["with_negative"], wt["entrances"], wt["cases_passed"],
+                 wt["cases"], "、".join(wt["zero_ids"]) or "无"))
+    if mutation:
+        mt = mutation["totals"]
+        print("   变异试点：%d/%d 被杀（%.1f%%）· 存活 %d · 不计门禁（低分是结论）"
+              % (mt["killed"], mt["mutants"], mt["score_pct"], mt["survived"]))
     if ledger:
         t = ledger["totals"]
         zeros = [r["id"] for r in ledger["checks"] + ledger.get("extras", [])

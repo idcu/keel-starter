@@ -1,4 +1,4 @@
-# keel-manifest v1 version=3.14.1 generated=2026-11-04
+# keel-manifest v1 version=3.15.0 generated=2026-11-04
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455
@@ -22,9 +22,9 @@ kernel	checks/test-upgrade.sh	755	7212b8881d058e0d36981e51dc2622d06f42bc2d64e2bc
 kernel	checks/test-upgrade.py	644	1a179e2b433a3404ece75228ac9bef68bbc298e20da65b37233195f1094bc40f
 kernel	checks/matrix/test-upgrade-matrix.sh	755	16d720da56a7c5d247cd59faffd86fceb6f1a1bfe3f90ef3170f62a5e5533fa0
 kernel	checks/matrix/test-upgrade-matrix.py	644	c525374c52b633da5299cd57a3f94ba983078ec3348e21c6d1767ce566e189b0
-kernel	checks/verify/check-verify-report.py	644	5e787919d280682b56ad1d7b43e795c087f6065fb88ec44fceeb74678e9e43a2
+kernel	checks/verify/check-verify-report.py	644	20c71709cc12e569a51d12ff4375282b5771e0cda30fe8610ed5bbacf6b5699f
 kernel	checks/verify/checks-ledger.py	644	31ff485c00949acac128a69a80075f0773469feb4f963f13d9af4847c5c8e264
-kernel	checks/verify/verify.py	644	ebe88a69d1b4f3f61db4d89c54298990c5b763de511f4f0bb674bb0999c91c58
+kernel	checks/verify/verify.py	644	80c423d80bad1bbfafb18a23ca8f31bb0b22f954316c3b3c3e39223dca6d1d7d
 kernel	checks/verify/verify.sh	755	cbf0168723b0eaeb304cf44b2b4430c29f26436a3147501584c1f651e081ae2a
 kernel	checks/hooks/pre-commit	755	9920408d87c4f72d9d4b89a5b8ddd9102b63eb9318fa1c6dc05677fff908c56b
 kernel	checks/hooks/commit-msg	755	f87ae2a27c611999aa7ec294f13c2cf5049238967e465d9118bc40a667256a6b
@@ -77,3 +77,7 @@ preserve	pitfalls/meta/xargs-arg-becomes-filename.md	644
 preserve	NOW-history/2026-09-30-初始模板.md	644	
 preserve	NOW-history/2026-10-15-度量回顾.md	644	
 kernel	checks/test-faults.py	644	5744a29976bf2d65cc73ebd46e09f4412519c863fb40797fbe44012864c76a02
+kernel	checks/wiring/test-wiring.py	644	4c500236222decb230cdebb7a46b6f5ac4e285455640059deaf7d902a00e999d
+kernel	checks/wiring/test-wiring.sh	755	ac1a9b4d80bfd3c8491faa8dadec7c5b945716a0c660fefd2cda48e97bb927ca
+kernel	checks/mutation/mutation.py	644	3cfa5446896d5f269fbe991f3928f9dcf2676581c787ba2a140a1309d49ee948
+kernel	checks/mutation/run.sh	755	2124d300525c3cc4f95bc434dece1aa3c8450df9b2120d48f9b2a5e353de54e3

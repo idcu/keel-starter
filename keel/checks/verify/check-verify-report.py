@@ -225,6 +225,104 @@ def _ledger_problems(ledger):
     return problems
 
 
+def _mutation_problems(mutation):
+    """变异试点小节：只校验**数字自洽**，不把「有存活变异体」判成失败。
+
+    得分低是结论，不是缺陷；若这里要求 100%，下一轮只会删掉难杀的变异体。
+    但分母必须真实：mutants = killed + survived + invalid，且 >= 1。
+    """
+    if not isinstance(mutation, dict):
+        return ["清单缺少 mutation 小节（变异测试试点得分）"]
+    t = mutation.get("totals") or {}
+    problems = []
+    for k in ("mutants", "killed", "survived", "invalid"):
+        if not isinstance(t.get(k), int):
+            problems.append("mutation.totals.%s 缺失或非整数" % k)
+    if problems:
+        return problems
+    if t["mutants"] < 1:
+        problems.append("mutation.totals.mutants=0（试点没有分母）")
+    if t["killed"] + t["survived"] + t["invalid"] != t["mutants"]:
+        problems.append("mutation 分母不闭合：killed+survived+invalid=%d，mutants=%d"
+                        % (t["killed"] + t["survived"] + t["invalid"], t["mutants"]))
+    if not mutation.get("selected"):
+        problems.append("mutation 未列出选中的判据编号")
+    if not mutation.get("excluded"):
+        problems.append("mutation 未列出排除的判据与理由（不许只挑好做的）")
+    if not mutation.get("boundary"):
+        problems.append("mutation 未写明抓不到什么（诚实边界）")
+    return problems
+
+
+def _wiring_problems(wiring):
+    """入口—用例—覆盖矩阵的自洽校验（v3.15.0）。
+
+    接线是**判据之外的另一层**：判据账本只能证明「有用例」，证明不了
+    「入口被调用」。这里要求矩阵把每个入口的状态写明；没有判死用例的入口
+    必须是 status=none 且带原因（wiring=0），不许用空字段沉默。
+    """
+    if not isinstance(wiring, dict):
+        return ["清单缺少 wiring 小节（入口—用例—覆盖矩阵）"]
+    ent = wiring.get("entrances")
+    cases = wiring.get("cases")
+    totals = wiring.get("totals") or {}
+    if not isinstance(ent, list) or not ent:
+        return ["wiring.entrances 为空或不是数组"]
+    if not isinstance(cases, list):
+        return ["wiring.cases 不是数组"]
+    problems = []
+    ids = [e.get("id") for e in ent]
+    if len(set(ids)) != len(ids):
+        problems.append("wiring 入口编号重复")
+    case_ids = {c.get("id") for c in cases}
+    none_ids = []
+    na_ids = []
+    for e in ent:
+        st = e.get("status")
+        if st not in ("negative", "none", "failed", "n/a"):
+            problems.append("wiring 入口 %s 的 status=%s 非法" % (e.get("id"), st))
+            continue
+        if st == "none":
+            none_ids.append(e.get("id"))
+            if not e.get("reason"):
+                problems.append("wiring 入口 %s 无判死用例却没有原因（不许静默）" % e.get("id"))
+        if st == "n/a":
+            na_ids.append(e.get("id"))
+            if not e.get("reason"):
+                problems.append("wiring 入口 %s 标 n/a 却没有原因" % e.get("id"))
+        if st == "negative":
+            refs = e.get("cases") or []
+            if not refs:
+                problems.append("wiring 入口 %s 标 negative 却没有用例编号" % e.get("id"))
+            missing = [c for c in refs if c not in case_ids]
+            if missing:
+                problems.append("wiring 入口 %s 引用了不存在的用例：%s"
+                                % (e.get("id"), "、".join(missing)))
+            for c in cases:
+                if c.get("id") in refs and not c.get("passed"):
+                    problems.append("wiring 入口 %s 的判死用例 %s 未通过" % (e.get("id"), c.get("id")))
+    for k, want in (("entrances", len(ent)), ("with_negative",
+                                              sum(1 for e in ent if e.get("status") == "negative")),
+                    ("wiring_zero", len(none_ids))):
+        if totals.get(k) != want:
+            problems.append("wiring.totals.%s=%s，应为 %s" % (k, totals.get(k), want))
+    if (totals.get("zero_ids") or []) != none_ids:
+        problems.append("wiring.totals.zero_ids 与 status=none 的入口不重合")
+    if totals.get("not_applicable") != len(na_ids):
+        problems.append("wiring.totals.not_applicable=%s，应为 %s"
+                        % (totals.get("not_applicable"), len(na_ids)))
+    if (totals.get("not_applicable_ids") or []) != na_ids:
+        problems.append("wiring.totals.not_applicable_ids 与 status=n/a 的入口不重合")
+    if totals.get("failed_entrances"):
+        problems.append("wiring 存在判死用例失败的入口：%s"
+                        % "、".join(totals["failed_entrances"]))
+    passed = sum(1 for c in cases if c.get("passed"))
+    if totals.get("cases") != len(cases) or totals.get("cases_passed") != passed:
+        problems.append("wiring.totals 用例数=%s/%s，实际 %d/%d"
+                        % (totals.get("cases_passed"), totals.get("cases"), passed, len(cases)))
+    return problems
+
+
 def structure_problems(report, repo=None):
     """清单自身的自洽性（与发行说明无关的那一半）：汇总 / 账本 / provenance。
 
@@ -249,6 +347,8 @@ def structure_problems(report, repo=None):
             problems.append("套件 %s 标记 SKIP 却没有跳过原因" % s.get("name"))
 
     problems.extend(_ledger_problems(_get(report, "checks_ledger")))
+    problems.extend(_wiring_problems(_get(report, "wiring")))
+    problems.extend(_mutation_problems(_get(report, "mutation")))
     problems.extend(_provenance_problems(_get(report, "provenance"), repo))
     return problems
 
@@ -265,6 +365,13 @@ def check(report, text, version=None, repo=None):
     body = scope_section(text, version)
     low = body.lower()
     hits = [p for p in FORBIDDEN if (p.lower() in low if p.isascii() else p in body)]
+    wt = _get(report, "wiring.totals", {}) or {}
+    wiring_zero = int(wt.get("wiring_zero") or 0)
+    if wiring_zero and hits:
+        problems.append("有 %d 个入口 wiring=0，发行说明却出现无条件表述：%s"
+                        % (wiring_zero, "、".join(hits)))
+    if wiring_zero and "wiring=0" not in body:
+        problems.append("有 %d 个入口 wiring=0，发行说明未写「wiring=0」" % wiring_zero)
     if (total_skipped or total_failed) and hits:
         problems.append("含 %d 跳过 / %d 失败，发行说明却出现无条件表述：%s"
                         % (total_skipped, total_failed, "、".join(hits)))
@@ -369,6 +476,26 @@ def _mk_report(statuses, skipped, failed=0):
                 ],
                 "auxiliary": [], "meta": [], "errors": [],
             },
+            "wiring": {
+                "entrances": [{"id": "E01", "entry": "lint", "case": "W01",
+                               "cases": ["W01"], "status": "negative", "reason": None}],
+                "cases": [{"id": "W01", "name": "lint 判死", "entry": "E01",
+                           "passed": True, "detail": "ok"}],
+                "totals": {"entrances": 1, "with_negative": 1, "wiring_zero": 0,
+                           "zero_ids": [], "not_applicable": 0,
+                           "not_applicable_ids": [], "failed_entrances": [],
+                           "cases": 1, "cases_passed": 1},
+                "duration_s": 0.1,
+            },
+            "mutation": {
+                "totals": {"mutants": 16, "killed": 15, "survived": 1,
+                           "invalid": 0, "score_pct": 93.8},
+                "mutants": [], "selected": ["§9.1-1"],
+                "excluded": [{"ref": "§9.1-12", "reason": "warn-only，非 fail 级"}],
+                "operators": ["delete_fail"],
+                "boundary": "抓不到接线错、语义正确但判据放宽未被 fixture 命中、跨文件/跨版本行为",
+                "duration_s": 1.0,
+            },
             "summary": {"passed": 9, "failed": failed, "skipped": skipped,
                         "verified": skipped == 0 and failed == 0}}
 
@@ -388,6 +515,20 @@ def selftest():
     ledger_extra["checks_ledger"]["totals"]["with_meta"]["denominator"] = 2
     prov_missing = _mk_report([("PASS", "PASS")], 0)
     prov_missing.pop("provenance")
+    wiring_missing = _mk_report([("PASS", "PASS")], 0)
+    wiring_missing.pop("wiring")
+    wiring_zero = _mk_report([("PASS", "PASS")], 0)
+    wiring_zero["wiring"]["entrances"][0].update(status="none", cases=[],
+                                                  reason="尚未建立判死用例")
+    wiring_zero["wiring"]["cases"] = []
+    wiring_zero["wiring"]["totals"].update(with_negative=0, wiring_zero=1,
+                                           zero_ids=["E01"], cases=0, cases_passed=0)
+    wiring_badcase = _mk_report([("PASS", "PASS")], 0)
+    wiring_badcase["wiring"]["entrances"][0]["cases"] = ["W99"]
+    mutation_missing = _mk_report([("PASS", "PASS")], 0)
+    mutation_missing.pop("mutation")
+    mutation_badtotal = _mk_report([("PASS", "PASS")], 0)
+    mutation_badtotal["mutation"]["totals"]["killed"] = 16
     fixtures = [
         ("含 SKIP + 「全部通过」必须被抓", skip_report, "全部通过", False),
         ("含 SKIP + 「全部通过」英文变体必须被抓", skip_report, "All green", False),
@@ -406,6 +547,15 @@ def selftest():
         ("缺 checks_ledger 小节必须被抓", ledger_missing, "全部通过", False),
         ("含元检查口径的分母对不上必须被抓", ledger_extra, "全部通过", False),
         ("缺 provenance 小节必须被抓", prov_missing, "全部通过", False),
+        ("缺 wiring 小节必须被抓", wiring_missing, "全部通过", False),
+        ("有入口 wiring=0 却写「全部通过」必须被抓", wiring_zero, "全部通过", False),
+        ("有入口 wiring=0 且写明 wiring=0 必须放行", wiring_zero,
+         "9 通过 / 0 跳过（未验证）· wiring=0: E01", True),
+        ("wiring 引用不存在的用例必须被抓", wiring_badcase, "全部通过", False),
+        ("缺 mutation 小节必须被抓", mutation_missing, "全部通过", False),
+        ("mutation 分母不闭合必须被抓", mutation_badtotal, "全部通过", False),
+        ("有存活变异体仍应放行（低分是结论）", _mk_report([("PASS", "PASS")], 0),
+         "9 通过 / 0 跳过（未验证）", True),
     ]
 
     # provenance 绑定的真判死用例：需要真 git 仓库，否则测不到 commit / dirty / sha。
