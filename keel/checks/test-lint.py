@@ -581,6 +581,56 @@ def find_doc():
     return None
 
 
+# ---------- SPEC-DIGEST（P0-2，v3.17.0）----------
+# 采用方仓库里没有 DESIGN.md，DOC 元检查只能 SKIP；但「随发布分发的判据脚本
+# 有没有被改」不能因此失去监督——否则采用方本地永远打印全绿，而判据可能已被
+# 替换成 `exit 0`。manifest.tsv 是升级引擎已经维护的哈希真源（kernel 行含这
+# 四个文件），这里直接复用它，不再新增第二份清单（避免两份哈希各自漂移）。
+SPEC_FILES = ["checks/keel-lint.sh", "checks/test-lint.py",
+              "checks/verify/checks-ledger.py", "checks/verify/verify.py"]
+
+
+def _sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def check_spec_digest(manifest=None, keel=None):
+    """判据脚本被改后必须红（采用方无 DESIGN 时的最后一道监督）。
+
+    返回 (ok, msg)：ok=None 表示清单不存在（无法核对，必须显式 SKIP，不许当 PASS）。
+    """
+    manifest = manifest or os.path.join(HERE, "manifest.tsv")
+    keel = keel or os.path.dirname(HERE)
+    if not os.path.isfile(manifest):
+        return None, "缺 checks/manifest.tsv（无法核对判据脚本是否被改）"
+    want = {}
+    for line in open(manifest, encoding="utf-8"):
+        if not line.strip() or line.startswith("#"):
+            continue
+        p = line.rstrip("\n").split("\t")
+        if len(p) >= 4 and p[0] == "kernel":
+            want[p[1]] = p[3]
+    bad = []
+    for rel in SPEC_FILES:
+        path = os.path.join(keel, rel)
+        if not os.path.isfile(path):
+            bad.append("%s 缺失" % rel)
+        elif rel not in want:
+            bad.append("%s 未登记" % rel)
+        elif want[rel] != _sha256(path):
+            bad.append("%s sha256 不符" % rel)
+    if bad:
+        return False, ("判据脚本与清单不符（本地结果不可信）: %s；"
+                       "确为有意修改则跑 keel-upgrade.sh --regen-manifest 重建清单"
+                       % "、".join(bad))
+    return True, "%d 个判据脚本与 checks/manifest.tsv 一致" % len(SPEC_FILES)
+
+
 def check_doc_consistency(script=None, doc=None):
     """随仓库发布的 keel-lint.sh 必须与 DESIGN.md §9.3 逐字一致。
 
@@ -694,7 +744,7 @@ def check_prose_numbers(idx=None, readme=None, doc=None, cases_n=None, meta_n=No
         ver = m.group(1) if m else None
     cases_n = len(CASES) if cases_n is None else cases_n       # 全集，不受 --only 子集影响
     meta_n = len(META_CASES) if meta_n is None else meta_n
-    total = cases_n + meta_n + 2    # +2 = NOISE / INVOKE 元检查
+    total = cases_n + meta_n + 6    # +6 = NOISE / INVOKE / DOC / SPEC-DIGEST / LOCALE / PROSE
     targets = []
     rd = readme if readme is not None else os.path.join(
         os.path.dirname(os.path.dirname(HERE)), "README.md")
@@ -748,7 +798,7 @@ def check_prose_numbers(idx=None, readme=None, doc=None, cases_n=None, meta_n=No
                                % (os.path.basename(path), ln, m.group(1), cases_n))
     if bad:
         return False, "%d 处漂移，例：%s" % (len(bad), bad[0])
-    return True, "README/DESIGN 散文数字与真源一致（版本 %s · %d 用例 + %d 元检查用例 + 2 元检查）" \
+    return True, "README/DESIGN 散文数字与真源一致（版本 %s · %d 用例 + %d 元检查用例 + 6 元检查）" \
                  % (ver, cases_n, meta_n)
 
 
@@ -814,6 +864,25 @@ def m03(d):
     ok, msg = check_prose_numbers(
         idx=os.path.join(d, "keel", "INDEX.md"), readme=readme, doc=doc,
         cases_n=len(CASES), meta_n=len(META_CASES))
+    return (ok is False), msg
+
+
+@mcase("§9.3-SPEC", "判据脚本被改后 SPEC-DIGEST 必须红", "§9.3-SPEC")
+def m04(d):
+    """采用方场景：只有 checks/（无 DESIGN.md），把 keel-lint.sh 追加一行后
+    必须被 manifest.tsv 的 sha256 抓住——否则本地仍打印全绿。"""
+    src = os.path.dirname(HERE)
+    keel = os.path.join(d, "keel")
+    for rel in SPEC_FILES:
+        dst = os.path.join(keel, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(os.path.join(src, rel), dst)
+    shutil.copy2(os.path.join(HERE, "manifest.tsv"),
+                 os.path.join(keel, "checks", "manifest.tsv"))
+    with open(os.path.join(keel, "checks/keel-lint.sh"), "a", encoding="utf-8") as fh:
+        fh.write("\n# tampered-by-test\n")
+    ok, msg = check_spec_digest(
+        manifest=os.path.join(keel, "checks", "manifest.tsv"), keel=keel)
     return (ok is False), msg
 
 
@@ -884,7 +953,7 @@ def main():
     print("  工具可用性: " + "  ".join(tools))
     print("=" * 76)
 
-    ok = bad = 0
+    ok = bad = skips = 0
     stderr_noise_log = []   # 收集全部非空 stderr（ADR 0014），末尾统一判一次
     for cid, name, ref, expect, want_rc, fn in cases:
         d = os.path.join(root, cid)
@@ -892,8 +961,9 @@ def main():
         try:
             fn(d)
         except SkipCase as e:
-            # 跳过计入通过（分母不变），但**必须打印原因**：静默跳过等于没有用例
-            ok += 1
+            # v3.17.0：跳过不再计入通过。保留打印原因（静默跳过等于没有用例），
+            # 但在汇总里单列「跳过」——否则采用方看到的仍是「全绿」。
+            skips += 1
             print("[SKIP] %s %-42s %s" % (cid, name, ref))
             print("        %s" % e)
             continue
@@ -948,14 +1018,29 @@ def main():
     print("=" * 76)
     doc_ok, doc_msg = check_doc_consistency()
     if doc_ok is None:
+        skips += 1
         print("[SKIP] DOC  脚本与文档一致性          %s" % doc_msg)
     else:
         print("[%s] DOC  脚本与文档一致性          %s" % ("PASS" if doc_ok else "FAIL", doc_msg))
+        ok += doc_ok
         if not doc_ok:
+            bad += 1
+    # SPEC-DIGEST（P0-2）：采用方没有 DESIGN.md 时，DOC 只能是 SKIP——但判据脚本
+    # 是否被改仍必须可查；比对 checks/manifest.tsv 里登记的 sha256。
+    spec_ok, spec_msg = check_spec_digest()
+    if spec_ok is None:
+        skips += 1
+        print("[SKIP] SPEC-DIGEST 判据脚本与清单一致      %s" % spec_msg)
+    else:
+        print("[%s] SPEC-DIGEST 判据脚本与清单一致      %s"
+              % ("PASS" if spec_ok else "FAIL", spec_msg))
+        ok += spec_ok
+        if not spec_ok:
             bad += 1
     # LOCALE（坑 bash3-utf8-varname-eats-byte）：段 3 LC_ALL 不得泄漏，段 4 须 locale 无关
     loc_ok, loc_msg = check_locale_isolation(base)
     print("[%s] LOCALE 段 3/4 locale 隔离          %s" % ("PASS" if loc_ok else "FAIL", loc_msg))
+    ok += loc_ok
     if not loc_ok:
         bad += 1
     # INVOKE（坑 worktree-eol-differs-from-main）：判据不得依赖 lint 的入参形式
@@ -965,12 +1050,14 @@ def main():
         bad += 1
     else:
         ok += 1
-    # PROSE（ADR 0018）：门面散文数字与真源一致——与 DOC 同族，不进用例分母
+    # PROSE（ADR 0018）：门面散文数字与真源一致——与 DOC 同族
     prose_ok, prose_msg = check_prose_numbers()
     if prose_ok is None:
+        skips += 1
         print("[SKIP] PROSE 散文数字与真源一致      %s" % prose_msg)
     else:
         print("[%s] PROSE 散文数字与真源一致      %s" % ("PASS" if prose_ok else "FAIL", prose_msg))
+        ok += prose_ok
         if not prose_ok:
             bad += 1
 
@@ -990,14 +1077,16 @@ def main():
         bad += not m_ok
 
     print("=" * 76)
-    # 分母要说清：cases 是故障注入用例，META_CASES 是元检查的判死用例，
-    # NOISE / INVOKE 是行为检查——三类都算"检查"，但不同类，混在一起会误读。
-    total = len(cases) + len(META_CASES) + 2   # +2 = NOISE / INVOKE 元检查
+    # 分母说清：50 个故障注入用例 + 4 个元检查判死用例 + 6 个元检查
+    # （NOISE / INVOKE / DOC / SPEC-DIGEST / LOCALE / PROSE）。
+    # v3.17.0 起汇总三态：跳过单列、不计入通过——采用方看到的「全绿」不再掩盖
+    # 「DOC/PROSE/SPEC-DIGEST 没跑」。
+    total = len(cases) + len(META_CASES) + 6
     if bad == 0:
-        print("✅ 自测通过：%d/%d（%d 用例 + %d 元检查用例 + 2 元检查）"
-              % (ok, total, len(cases), len(META_CASES)))
+        print("✅ 自测通过：%d 通过 / %d 跳过 / 0 失败（共 %d 项：%d 用例 + %d 元检查用例 + 6 元检查）"
+              % (ok, skips, total, len(cases), len(META_CASES)))
     else:
-        print("❌ 自测失败：%d 项未通过（共 %d 项）" % (bad, total))
+        print("❌ 自测失败：%d 失败 / %d 通过 / %d 跳过（共 %d 项）" % (bad, ok, skips, total))
     if keep:
         print("   临时目录保留：%s" % root)
     else:

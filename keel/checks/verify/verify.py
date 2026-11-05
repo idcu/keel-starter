@@ -125,6 +125,19 @@ def parse_test_lint(rc, out):
     # 因此这里减去 skips，并对 cases 不再叠加——passed + failed + skipped == cases。
     # v3.14.0：元检查用例（META_CASES）进分母后，汇总口径变为
     # 「N 用例 + M 元检查用例 + 2 元检查」，这里必须同时接受两种写法。
+    # v3.17.0：汇总行改为三态（N 通过 / M 跳过 / K 失败），跳过不再计入通过。
+    # 直接读汇总里的三个数，不再用 [SKIP] 行数做减法——元检查的 SKIP 现在也计入
+    # 汇总，两种口径混算会重复计数。
+    m = re.search(r"✅ 自测通过：(\d+) 通过 / (\d+) 跳过 / (\d+) 失败（共 (\d+) 项", out)
+    if m:
+        return {"passed": int(m.group(1)), "failed": int(m.group(3)),
+                "skipped": int(m.group(2)), "cases": int(m.group(4)),
+                "reason": reason}
+    m = re.search(r"❌ 自测失败：(\d+) 失败 / (\d+) 通过 / (\d+) 跳过（共 (\d+) 项）", out)
+    if m:
+        return {"passed": int(m.group(2)), "failed": int(m.group(1)),
+                "skipped": int(m.group(3)), "cases": int(m.group(4)),
+                "reason": reason}
     m = re.search(r"✅ 自测通过：(\d+)/(\d+)（(\d+) 用例 \+ (\d+) 元检查用例 \+ 2 元检查）", out)
     if m:
         ok = int(m.group(1))

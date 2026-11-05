@@ -9,8 +9,8 @@
 
 口径（必须与 DESIGN §12.3 一致，v3.14.0 起分三个口径，同时打印）：
     仅 §9.1          = 19 个编号。第 15 项是项目扩展位，内核不实现，coverage=none。
-    含元检查         = §9.1 19 + DOC / LOCALE / PROSE 3 = 22
-    含 §9.3 附加     = 含元检查 + 预算真源 budget.env 检查 1 = 23
+    含元检查         = §9.1 19 + DOC / SPEC-DIGEST / LOCALE / PROSE 4 = 23
+    含 §9.3 附加     = 含元检查 + 预算真源 budget.env 检查 1 = 24
     三档：
       negative      = 有负例（fail 级 rc=1；warn 级 rc=0 且断言了告警文本；
                       元检查的判死用例 = 构造坏输入并断言检查返回红）
@@ -77,6 +77,8 @@ META = [
      "note": "段 3 LC_ALL 不泄漏；段 4 与 locale 无关；判死用例见 META_CASES"},
     {"id": "§9.3-PROSE", "counted_in_selftest_total": False,
      "note": "门面散文数字与真源一致；判死用例见 META_CASES"},
+    {"id": "§9.3-SPEC", "counted_in_selftest_total": False,
+     "note": "采用方无 DESIGN 时，判据脚本仍须与 checks/manifest.tsv 的 sha256 一致；判死用例见 META_CASES"},
 ]
 
 # §9.1 之外的附加判据（v3.14.0）：kind=meta 进「含元检查」，kind=aux 只进「全部」。
@@ -84,6 +86,7 @@ EXTRA_REGISTRY = [
     ("§9.3-DOC", "fail", "脚本与 DESIGN §9.3 逐字一致", "meta"),
     ("§9.3-LOCALE", "fail", "段 3 LC_ALL 不泄漏；段 4 与 locale 无关", "meta"),
     ("§9.3-PROSE", "fail", "门面散文数字与真源一致", "meta"),
+    ("§9.3-SPEC", "fail", "判据脚本与 checks/manifest.tsv 的 sha256 一致", "meta"),
     ("§9.3-BUDGET", "fail", "预算真源 budget.env 缺失即 fail", "aux"),
 ]
 
@@ -399,15 +402,15 @@ def selftest():
                          and led["totals"]["negative"] == 18
                          and led["totals"]["none"] == 1
                          and not led["errors"])
-    # v3.14.0：元检查进分母。22 = 19 + DOC/LOCALE/PROSE；23 = 再加预算真源。
+    # v3.14.0：元检查进分母。23 = 19 + DOC/SPEC-DIGEST/LOCALE/PROSE；24 = 再加预算真源。
     total += 1
-    good += _run_fixture("含元检查 21/22 与 §9.3 全量 22/23 同时给出",
-                         led["totals"]["with_meta"]["denominator"] == 22
-                         and led["totals"]["with_meta"]["negative"] == 21
-                         and led["totals"]["all"]["denominator"] == 23
-                         and led["totals"]["all"]["negative"] == 22
-                         and led["totals"]["with_meta"]["coverage_pct"] == 95.5
-                         and led["totals"]["all"]["coverage_pct"] == 95.7)
+    good += _run_fixture("含元检查 22/23 与 §9.3 全量 23/24 同时给出",
+                         led["totals"]["with_meta"]["denominator"] == 23
+                         and led["totals"]["with_meta"]["negative"] == 22
+                         and led["totals"]["all"]["denominator"] == 24
+                         and led["totals"]["all"]["negative"] == 23
+                         and led["totals"]["with_meta"]["coverage_pct"] == 95.7
+                         and led["totals"]["all"]["coverage_pct"] == 95.8)
 
     # 反向验证（关键）：删掉 §9.1-19 的 4 条判死用例，账本必须变。
     tmp, (cut, cut_meta) = _copy_without(cases_path, ["45", "46", "47", "48"])
@@ -426,10 +429,10 @@ def selftest():
     led_cut2 = build(cut2, meta_cases=cut2_meta)
     doc_row = [r for r in led_cut2["extras"] if r["id"] == "§9.3-DOC"][0]
     total += 1
-    good += _run_fixture("删掉 §9.3-DOC 判死用例 → coverage=none、含元检查 21→20",
+    good += _run_fixture("删掉 §9.3-DOC 判死用例 → coverage=none、含元检查 22→21",
                          doc_row["coverage"] == "none"
-                         and led_cut2["totals"]["with_meta"]["denominator"] == 22
-                         and led_cut2["totals"]["with_meta"]["negative"] == 20)
+                         and led_cut2["totals"]["with_meta"]["denominator"] == 23
+                         and led_cut2["totals"]["with_meta"]["negative"] == 21)
     shutil.rmtree(tmp2, ignore_errors=True)
 
     # 预算真源（§9.3-BUDGET）：删掉用例 20 后必须掉出「全部」口径。
@@ -437,9 +440,9 @@ def selftest():
     led_cut3 = build(cut3, meta_cases=cut3_meta)
     bud = [r for r in led_cut3["extras"] if r["id"] == "§9.3-BUDGET"][0]
     total += 1
-    good += _run_fixture("删掉 §9.3-BUDGET 判死用例 → 全部口径 22/23→21/23",
+    good += _run_fixture("删掉 §9.3-BUDGET 判死用例 → 全部口径 23/24→22/24",
                          bud["coverage"] == "none"
-                         and led_cut3["totals"]["all"]["negative"] == 21)
+                         and led_cut3["totals"]["all"]["negative"] == 22)
     shutil.rmtree(tmp3, ignore_errors=True)
 
     # 只有正例：给扩展位塞一条 rc=0 空期望的基线，应判 positive_only 而非 negative。
