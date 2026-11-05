@@ -1,31 +1,28 @@
 #!/usr/bin/env python3
-"""checks-ledger.py —— 判据清单与覆盖率账本（《Keel 设计稿》§9.1 / §12.3）
+"""checks-ledger.py —— 判据账本与可复算的判据遵守率（DESIGN §9.1 / §12.3）
 
 用法：
     python3 keel/checks/verify/checks-ledger.py --summary
     python3 keel/checks/verify/checks-ledger.py --json [--out checks-ledger.json]
     python3 keel/checks/verify/checks-ledger.py --selftest
-    python3 keel/checks/verify/checks-ledger.py --cases <test-lint.py> [--design DESIGN.md]
+    python3 keel/checks/verify/checks-ledger.py --recompute   # 外人复算入口
+    python3 keel/checks/verify/checks-ledger.py --check       # 门禁用：账本过期即 rc=1
+    python3 keel/checks/verify/checks-ledger.py --regen       # 重新生成 ledger.tsv
+    python3 keel/checks/verify/checks-ledger.py --negctl      # 三条负控实跑
 
-口径（必须与 DESIGN §12.3 一致，v3.14.0 起分三个口径，同时打印）：
-    仅 §9.1          = 19 个编号。第 15 项是项目扩展位，内核不实现，coverage=none。
-    含元检查         = §9.1 19 + DOC / SPEC-DIGEST / LOCALE / PROSE 4 = 23
-    含 §9.3 附加     = 含元检查 + 预算真源 budget.env 检查 1 = 24
-    三档：
-      negative      = 有负例（fail 级 rc=1；warn 级 rc=0 且断言了告警文本；
-                      元检查的判死用例 = 构造坏输入并断言检查返回红）
-      positive_only = 只有合法基线（rc=0 且无期望输出）
-      none          = 没有任何用例（coverage=0）
-
-为什么分母不合成一个数：
-    「18/19 = 94.7%」与「18/18 = 100%」都能被讲成好消息，
-    而 §9.3 预算检查、元检查、3 个动态套件原本都不在 19 项里。
-    账本必须同时打印分母与未覆盖清单，禁止只报百分比；扩大分母后覆盖率
-    下降是结论，不是缺陷——更不允许为了好看把元检查留在分母外。
+口径（正文在 DESIGN §12.3「判据账本口径」，本文件只实现，不另立定义）：
+    * 枚举真源 = checks/verify/criteria.tsv，一条判据一行；分母 = 该口径下 counted=yes 的行数。
+    * D1 仅 §9.1；D2 = D1 + 元检查；D3 = D2 + §9.3 预算检查。三个分母同时打印。
+    * PASS = coverage=negative（fail 级有 rc=1 判死用例；warn 级有断言告警文本的用例）。
+    * SKIP = coverage 为 positive_only / none；SKIP 进分母、不进分子。
+    * EXCLUDED = criteria.tsv 的 counted=no；不进任何分母，必须写理由；§9.1 判据不得排除。
+    * 证据指针指到 test-lint.py 的具体用例 ID（CASES:… / META:…）。
+    * 账本 checks/verify/ledger.tsv 是生成物并入库；--check 逐字节比对，任何手改即红。
 """
 
 import argparse
 import datetime
+import hashlib
 import importlib.util
 import json
 import os
@@ -40,59 +37,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 KEEL = os.path.dirname(os.path.dirname(HERE))
 REPO = os.path.dirname(KEEL)
 DEFAULT_CASES = os.path.join(KEEL, "checks", "test-lint.py")
+DEFAULT_CRITERIA = os.path.join(HERE, "criteria.tsv")
+DEFAULT_LEDGER = os.path.join(HERE, "ledger.tsv")
 DEFAULT_DESIGN = os.path.join(REPO, "DESIGN.md")
-
-# 单一真源：判据编号只在这里声明一次。
-# 标题来自 DESIGN §9.1；编号必须连续 1..19，缺号/重号由 --selftest 判死。
-REGISTRY = [
-    ("§9.1-1", "fail", "大小：行数 / 字节 / 单行字节 / 单目录文件数超限"),
-    ("§9.1-2", "fail", "frontmatter：缺失、字段缺失、行数 / 字节超限"),
-    ("§9.1-3", "fail", "死链：@路径 与 markdown 链接指向不存在的文件"),
-    ("§9.1-4", "fail", "孤儿：热区文档未被任何热区文档以链接引用"),
-    ("§9.1-5", "fail", "坑条目三段式（症状 / 根因 / 正解）缺失"),
-    ("§9.1-6", "fail", "值域：status / severity / keywords / last-verified / triggers"),
-    ("§9.1-7", "fail", "登记：坑未进 pitfalls/INDEX；域索引含非表格正文"),
-    ("§9.1-8", "fail", "命名：热区文件名含日期 / 大写 / 下划线 / 空格"),
-    ("§9.1-9", "fail", "循环引用：md → md 引用图存在环"),
-    ("§9.1-10", "fail", "必读与点火：必读文件缺失、根索引缺字段、锚点不一致"),
-    ("§9.1-11", "fail", "状态机：frozen 期间新增 contracts；单月例外决策 >2"),
-    ("§9.1-12", "warn", "陈旧：last-verified 超 30 天；NOW 的 updated 超 7 天"),
-    ("§9.1-13", "warn", "待蒸馏：triggers ≥ 3 且 status ≠ distilled"),
-    ("§9.1-14", "fail", "取代关系：decisions/* 的 superseded-by 指向不存在文件"),
-    ("§9.1-15", "extension", "契约漂移 / 术语混用（项目扩展位，内核不实现）"),
-    ("§9.1-16", "fail", "闭环钩子本体：pre-commit / commit-msg 缺失或不可执行"),
-    ("§9.1-17", "fail", "版本副本一致：keel-version / CHANGELOG / README 徽章"),
-    ("§9.1-18", "fail", "跨平台底线：CRLF；仅大小写不同的路径"),
-    ("§9.1-19", "fail", "写路径收敛：禁止裸 cp/mv/install、sed -i、重定向直写"),
-]
-
-META = [
-    {"id": "NOISE", "counted_in_selftest_total": True,
-     "note": "全部用例的 stderr 必须为空或命中显式豁免（ADR 0014）；无独立判死用例，不进账本分母"},
-    {"id": "INVOKE", "counted_in_selftest_total": True,
-     "note": "lint 的入参形式无关（相对 / 绝对 / . / 带空格）；无独立判死用例，不进账本分母"},
-    {"id": "§9.3-DOC", "counted_in_selftest_total": False,
-     "note": "脚本与 DESIGN §9.3 逐字一致；判死用例见 META_CASES，进「含元检查」分母"},
-    {"id": "§9.3-LOCALE", "counted_in_selftest_total": False,
-     "note": "段 3 LC_ALL 不泄漏；段 4 与 locale 无关；判死用例见 META_CASES"},
-    {"id": "§9.3-PROSE", "counted_in_selftest_total": False,
-     "note": "门面散文数字与真源一致；判死用例见 META_CASES"},
-    {"id": "§9.3-SPEC", "counted_in_selftest_total": False,
-     "note": "采用方无 DESIGN 时，判据脚本仍须与 checks/manifest.tsv 的 sha256 一致；判死用例见 META_CASES"},
-]
-
-# §9.1 之外的附加判据（v3.14.0）：kind=meta 进「含元检查」，kind=aux 只进「全部」。
-EXTRA_REGISTRY = [
-    ("§9.3-DOC", "fail", "脚本与 DESIGN §9.3 逐字一致", "meta"),
-    ("§9.3-LOCALE", "fail", "段 3 LC_ALL 不泄漏；段 4 与 locale 无关", "meta"),
-    ("§9.3-PROSE", "fail", "门面散文数字与真源一致", "meta"),
-    ("§9.3-SPEC", "fail", "判据脚本与 checks/manifest.tsv 的 sha256 一致", "meta"),
-    ("§9.3-BUDGET", "fail", "预算真源 budget.env 缺失即 fail", "aux"),
-]
 
 # test-lint 历史上用 "§9.3" 指预算检查（用例 20），保留别名，不要求改用例编号。
 EXTRA_ALIAS = {"§9.3": "§9.3-BUDGET"}
-
 AUX_NOTES = {
     "§3.4": "命名豁免的合法基线（支持性用例，不是独立检查项）",
     "§6.1": "frontmatter 行内注释的合法基线",
@@ -101,12 +51,30 @@ AUX_NOTES = {
 }
 
 
-def load_cases(path):
-    """导入 test-lint.py，直接读 CASES 与 META_CASES —— 不解析文本、不维护第二份清单。
+def sha256_of(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
 
-    返回 (cases, meta_cases)。META_CASES 是元检查的判死用例（v3.14.0 起存在）；
-    老版本 test-lint 没有它，用 getattr 兜底，账本会把三条元检查记为 none。
-    """
+
+def load_criteria(path):
+    """读 criteria.tsv。不做隐式纠错：坏行就是坏行，交给 validate 判死。"""
+    rows = []
+    with open(path, encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, 1):
+            line = line.rstrip("\n")
+            if not line.strip() or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) != 6:
+                raise ValueError("%s:%d 列数=%d，应为 6" % (path, lineno, len(parts)))
+            cid, section, level, kind, counted, title = parts
+            rows.append({"id": cid, "section": section, "level": level,
+                         "kind": kind, "counted": counted, "title": title})
+    return rows
+
+
+def load_cases(path):
+    """导入 test-lint.py，直接读 CASES 与 META_CASES —— 不解析文本、不维护第二份清单。"""
     name = "keel_cases_%s" % uuid.uuid4().hex
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
@@ -140,116 +108,168 @@ def parse_design_91(text):
     return nums
 
 
-def build(cases, design_text=None, meta_cases=None):
-    meta_cases = meta_cases or []
+def _validate_criteria(criteria):
     errors = []
-    ids = [c[0] for c in REGISTRY]
-    nums = []
-    for cid in ids:
-        m = re.match(r"§9\.1-(\d+)$", cid)
-        if not m:
-            errors.append("判据编号不符合 §9.1-N：%s" % cid)
-            continue
-        nums.append(int(m.group(1)))
-    if sorted(nums) != list(range(1, 20)):
-        errors.append("判据编号不连续：%s" % ",".join(map(str, nums)))
+    ids = [r["id"] for r in criteria]
     if len(set(ids)) != len(ids):
         errors.append("判据编号重复")
+    for r in criteria:
+        if r["kind"] not in ("rule", "meta", "aux"):
+            errors.append("%s 的 kind=%s 非法（应为 rule/meta/aux）" % (r["id"], r["kind"]))
+        if r["counted"] not in ("yes", "no"):
+            errors.append("%s 的 counted=%s 非法（应为 yes/no）" % (r["id"], r["counted"]))
+        if r["kind"] == "rule" and r["section"] != "§9.1":
+            errors.append("%s 是 rule 但 section=%s（应为 §9.1）" % (r["id"], r["section"]))
+        if r["kind"] in ("meta", "aux") and r["section"] != "§9.3":
+            errors.append("%s 是 %s 但 section=%s（应为 §9.3）" % (r["id"], r["kind"], r["section"]))
+        if r["kind"] == "rule" and r["level"] not in ("fail", "warn", "extension"):
+            errors.append("%s 的 level=%s 非法" % (r["id"], r["level"]))
+        if r["kind"] in ("meta", "aux") and r["level"] not in ("fail", "meta"):
+            errors.append("%s 的 level=%s 非法" % (r["id"], r["level"]))
+    # §9.1 必须是连续编号，且不得被移出分母——那是改口径，只能走新口径 + ADR。
+    rule_nums = []
+    for r in criteria:
+        if r["section"] != "§9.1":
+            continue
+        m = re.match(r"^§9\.1-(\d+)$", r["id"])
+        if not m:
+            errors.append("§9.1 判据编号不符合 §9.1-N：%s" % r["id"])
+            continue
+        rule_nums.append(int(m.group(1)))
+        if r["counted"] != "yes":
+            errors.append("%s 被排除出分母：§9.1 判据不得 counted=no（改口径须 ADR）" % r["id"])
+    if rule_nums and sorted(rule_nums) != list(range(1, max(rule_nums) + 1)):
+        errors.append("§9.1 判据编号不连续（缺 %s）"
+                      % ",".join(map(str, sorted(set(range(1, max(rule_nums) + 1))
+                                               - set(rule_nums)))))
+    if not rule_nums:
+        errors.append("criteria.tsv 里没有任何 §9.1 判据")
+    return errors
 
-    extra_ids = {e[0] for e in EXTRA_REGISTRY}
-    alias_keys = set(EXTRA_ALIAS)
-    known = set(ids) | extra_ids | alias_keys
+
+def build(criteria, cases, design_text=None, meta_cases=None):
+    meta_cases = meta_cases or []
+    errors = _validate_criteria(criteria)
+
+    known = {r["id"] for r in criteria} | set(EXTRA_ALIAS)
     for ref in sorted({c[2] for c in cases}):
         if re.match(r"§9\.1-\d+$", ref) and ref not in known:
             errors.append("test-lint 引用了未登记的判据：%s" % ref)
-        if ref.startswith("§9.3-") and ref not in extra_ids:
+        if ref.startswith("§9.3-") and ref not in known:
             errors.append("test-lint 引用了未登记的 §9.3 附加判据：%s" % ref)
     for mc in meta_cases:
-        if mc[2] not in extra_ids and mc[2] not in alias_keys:
+        if mc[2] not in known and mc[2] not in EXTRA_ALIAS:
             errors.append("元检查判死用例引用了未登记的判据：%s（%s）" % (mc[2], mc[0]))
 
     rows = []
-    for cid, level, title in REGISTRY:
-        cs = [c for c in cases if c[2] == cid]
-        death = sum(1 for c in cs if classify(c) == "death")
-        warn = sum(1 for c in cs if classify(c) == "warn")
-        base = sum(1 for c in cs if classify(c) == "baseline")
-        if level == "fail":
-            negative = death
-        elif level == "warn":
-            negative = warn
-        else:
-            negative = 0
-        if negative:
-            coverage = "negative"
-        elif cs:
-            coverage = "positive_only"
-        else:
-            coverage = "none"
-        rows.append({
-            "id": cid,
-            "level": level,
-            "kind": "extension" if level == "extension" else "rule",
-            "title": title,
-            "cases": len(cs),
-            "negative_cases": negative,
-            "death_cases": death,
-            "warn_cases": warn,
-            "baseline_cases": base,
-            "coverage": coverage,
-        })
-
-    # §9.1 之外的附加判据（v3.14.0）：元检查判死用例来自 META_CASES。
-    # 没有判死用例的元检查保持 coverage=none —— 宁可列成 0，也不假装有覆盖。
-    extra_rows = []
-    for cid, level, title, kind in EXTRA_REGISTRY:
-        refs = {cid} | {k for k, v in EXTRA_ALIAS.items() if v == cid}
+    for r in criteria:
+        refs = {r["id"]} | {k for k, v in EXTRA_ALIAS.items() if v == r["id"]}
         cs = [c for c in cases if c[2] in refs]
         mc = [c for c in meta_cases if c[2] in refs]
-        negative = len(mc) + sum(1 for c in cs if classify(c) in ("death", "warn"))
-        if negative:
+        if r["level"] == "fail":
+            negative = sum(1 for c in cs if classify(c) == "death") + len(mc)
+        elif r["level"] == "warn":
+            negative = sum(1 for c in cs if classify(c) == "warn")
+        else:
+            negative = 0
+        if r["counted"] == "no":
+            coverage = "excluded"
+            status = "EXCLUDED"
+        elif negative:
             coverage = "negative"
-        elif cs:
+            status = "PASS"
+        elif cs or mc:
             coverage = "positive_only"
+            status = "SKIP"
         else:
             coverage = "none"
-        extra_rows.append({
-            "id": cid,
-            "level": level,
-            "kind": kind,
-            "title": title,
-            "cases": len(cs) + len(mc),
-            "negative_cases": negative,
-            "death_cases": negative,
-            "warn_cases": 0,
-            "baseline_cases": max(0, len(cs) - negative),
-            "coverage": coverage,
+            status = "SKIP"
+
+        ev = []
+        if cs:
+            ev.append("CASES:" + ",".join(sorted(c[0] for c in cs)))
+        if mc:
+            ev.append("META:" + ",".join(sorted(c[0] for c in mc)))
+        evidence = ";".join(ev) if ev else "none"
+
+        if status == "EXCLUDED":
+            reason = "不计入分母：无独立判死用例（进自测分母）"
+        elif status == "PASS":
+            reason = "-"
+        elif r["level"] == "extension":
+            reason = "扩展位（DESIGN §9.2）：内核不实现，需项目侧判据"
+        elif coverage == "positive_only":
+            reason = "仅合法基线，无判死用例"
+        else:
+            reason = "无用例"
+
+        rows.append({
+            "id": r["id"], "section": r["section"], "level": r["level"],
+            "kind": r["kind"], "counted": r["counted"], "title": r["title"],
+            "status": status, "coverage": coverage,
+            "cases": len(cs) + len(mc), "negative_cases": negative,
+            "death_cases": sum(1 for c in cs if classify(c) == "death") + len(mc),
+            "warn_cases": sum(1 for c in cs if classify(c) == "warn"),
+            "baseline_cases": sum(1 for c in cs if classify(c) == "baseline"),
+            "evidence": evidence, "reason": reason,
         })
 
-    numbered = len(rows)
-    implemented = sum(1 for r in rows if r["kind"] == "rule")
-    extension = numbered - implemented
-    negative = sum(1 for r in rows if r["coverage"] == "negative")
-    positive_only = sum(1 for r in rows if r["coverage"] == "positive_only")
-    none = sum(1 for r in rows if r["coverage"] == "none")
-    neg_fail = sum(1 for r in rows if r["level"] == "fail" and r["negative_cases"] > 0)
-    neg_warn = sum(1 for r in rows if r["level"] == "warn" and r["negative_cases"] > 0)
-    if negative + positive_only + none != numbered:
-        errors.append("三档之和 != 判据总数")
+    counted = [r for r in rows if r["counted"] == "yes"]
+    checks = [r for r in rows if r["section"] == "§9.1"]
+    extras = [r for r in counted if r["section"] != "§9.1"]
+    excluded = [r for r in rows if r["counted"] == "no"]
+
+    negative = sum(1 for r in checks if r["coverage"] == "negative")
+    positive_only = sum(1 for r in checks if r["coverage"] == "positive_only")
+    none = sum(1 for r in checks if r["coverage"] == "none")
+    if negative + positive_only + none != len(checks):
+        errors.append("三档之和 != §9.1 判据总数")
+    implemented = sum(1 for r in checks if r["level"] != "extension")
+    extension = len(checks) - implemented
 
     def _uni(rows_part):
-        den = len(rows_part)
-        neg = sum(1 for r in rows_part if r["coverage"] == "negative")
-        return {"denominator": den, "negative": neg,
+        # 分母只从行数推导。这里的 len() 是唯一来源，任何字面量都视为口径被改。
+        ids = [r["id"] for r in rows_part if r["counted"] == "yes"]
+        den = len(ids)
+        neg = sum(1 for r in rows_part if r["counted"] == "yes" and r["coverage"] == "negative")
+        return {"denominator": den, "negative": neg, "denominator_ids": ids,
                 "coverage_pct": round(neg * 100.0 / den, 1) if den else 0.0}
 
-    meta_part = [r for r in extra_rows if r["kind"] == "meta"]
-    aux_part = [r for r in extra_rows if r["kind"] == "aux"]
-    with_meta = _uni(rows + meta_part)
-    all_scope = _uni(rows + meta_part + aux_part)
-    for u in (with_meta, all_scope):
-        if u["denominator"] != numbered + (len(extra_rows) if u is all_scope else len(meta_part)):
-            errors.append("附加口径分母与登记数不一致")
+    d1 = _uni(checks)
+    d2 = _uni(checks + [r for r in extras if r["kind"] == "meta"])
+    d3 = _uni(checks + extras)
+    if d1["denominator"] != len(checks):
+        errors.append("D1 分母与 §9.1 判据条数不一致")
+    if d3["denominator"] != len(counted):
+        errors.append("D3 分母与 counted=yes 条数不一致")
+
+    design_check = {"path": None, "status": "skipped", "rows": None,
+                    "reason": "未提供 DESIGN.md（采用方环境）"}
+    if design_text is not None:
+        design_check["status"] = "checked"
+        design_check["reason"] = None
+        nums_in_doc = parse_design_91(design_text)
+        if nums_in_doc is None:
+            errors.append("DESIGN 找不到 §9.1 小节")
+        else:
+            doc_set = set(nums_in_doc)
+            led_set = set(int(re.match(r"^§9\.1-(\d+)$", r["id"]).group(1))
+                          for r in checks if re.match(r"^§9\.1-(\d+)$", r["id"]))
+            missing = sorted(doc_set - led_set)
+            extra = sorted(led_set - doc_set)
+            if missing:
+                errors.append("DESIGN §9.1 有条目未进账本：%s"
+                              % ",".join("§9.1-%d" % n for n in missing))
+            if extra:
+                errors.append("账本有条目不在 DESIGN §9.1：%s"
+                              % ",".join("§9.1-%d" % n for n in extra))
+            if len(nums_in_doc) != len(led_set):
+                errors.append("DESIGN §9.1 行数 %d 与账本 §9.1 条数 %d 不一致"
+                              % (len(nums_in_doc), len(led_set)))
+        design_check["rows"] = len(nums_in_doc) if nums_in_doc else 0
+
+    meta = [{"id": r["id"], "counted_in_selftest_total": r["id"] in ("NOISE", "INVOKE"),
+             "note": r["title"]} for r in rows if r["kind"] == "meta"]
 
     aux = []
     for ref in sorted({c[2] for c in cases
@@ -263,48 +283,88 @@ def build(cases, design_text=None, meta_cases=None):
             "baseline_cases": sum(1 for c in cs if classify(c) == "baseline"),
         })
 
-    design_check = {"path": None, "status": "skipped", "rows": None}
-    if design_text is not None:
-        design_check["status"] = "checked"
-        nums_in_doc = parse_design_91(design_text)
-        if nums_in_doc is None:
-            errors.append("DESIGN 找不到 §9.1 小节")
-        elif sorted(nums_in_doc) != list(range(1, 20)):
-            errors.append("DESIGN §9.1 行数与账本不一致：doc=%d, ledger=%d（缺 %s）"
-                          % (len(nums_in_doc), numbered,
-                             ",".join(map(str, sorted(set(range(1, 20)) - set(nums_in_doc)))) or "无"))
-        design_check["rows"] = len(nums_in_doc) if nums_in_doc else 0
-
     return {
         "schema": 1,
         "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
-        "scope": {"numbered": "§9.1-1..19", "extension_slot": "§9.1-15",
-                  "with_meta": "§9.1 19 + 元检查 3 = 22",
-                  "all": "含元检查 22 + 预算真源 1 = 23",
-                  "excludes": ["动态套件（test-upgrade/test-faults/matrix）",
-                               "NOISE / INVOKE（无独立判死用例，不进分母）"]},
+        "scope": {
+            "numbered_ids": d1["denominator_ids"],
+            "D1": "仅 §9.1 = §9.1 行数（由 criteria.tsv 推导）",
+            "D2": "§9.1 + 元检查（kind=meta）",
+            "D3": "§9.1 + 元检查 + 预算真源（kind=aux）",
+            "excludes": [r["id"] for r in excluded],
+            "out_of_scope": ["动态套件（test-upgrade/test-faults/matrix）"],
+        },
         "design_check": design_check,
         "totals": {
-            "numbered": numbered,
+            "numbered": len(checks),
             "implemented": implemented,
             "extension": extension,
             "negative": negative,
-            "negative_fail_level": neg_fail,
-            "negative_warn_level": neg_warn,
+            "negative_fail_level": sum(1 for r in checks
+                                       if r["level"] == "fail" and r["negative_cases"] > 0),
+            "negative_warn_level": sum(1 for r in checks
+                                       if r["level"] == "warn" and r["negative_cases"] > 0),
             "positive_only": positive_only,
             "none": none,
-            "coverage_pct_of_numbered": round(negative * 100.0 / numbered, 1),
-            "coverage_pct_of_implemented": round(negative * 100.0 / implemented, 1),
-            "with_meta": with_meta,
-            "all": all_scope,
+            "coverage_pct_of_numbered": d1["coverage_pct"],
+            "coverage_pct_of_implemented": round(negative * 100.0 / implemented, 1) if implemented else 0.0,
+            "status": {"PASS": sum(1 for r in rows if r["status"] == "PASS"),
+                       "SKIP": sum(1 for r in rows if r["status"] == "SKIP"),
+                       "EXCLUDED": sum(1 for r in rows if r["status"] == "EXCLUDED")},
+            "with_meta": d2,
+            "all": d3,
         },
-        "checks": rows,
-        "extras": extra_rows,
+        "checks": checks,
+        "extras": extras,
+        "excluded": excluded,
+        "all_rows": rows,
         "auxiliary": aux,
-        "meta": META,
+        "meta": meta,
         "out_of_scope": ["test-upgrade", "test-faults", "matrix"],
         "errors": errors,
     }
+
+
+def serialize_ledger(ledger):
+    """账本的唯一序列化形式：无时间戳、无环境信息，逐字节可复算。"""
+    lines = [
+        "# keel-criteria-ledger v1",
+        "# 口径：DESIGN §12.3「判据账本口径」；生成：checks/verify/checks-ledger.py --regen",
+        "# 分母由本账本 counted=yes 的行数推导，不写常量；复算：checks-ledger.py --recompute",
+        "# 列：id<TAB>section<TAB>level<TAB>kind<TAB>counted<TAB>status<TAB>coverage<TAB>cases<TAB>negative_cases<TAB>evidence<TAB>reason",
+    ]
+    for r in ledger["all_rows"]:
+        lines.append("\t".join(str(r[k]) for k in
+                               ("id", "section", "level", "kind", "counted", "status",
+                                "coverage", "cases", "negative_cases", "evidence", "reason")))
+    return "\n".join(lines) + "\n"
+
+
+def check_ledger(ledger, ledger_path):
+    """已提交账本必须逐字节等于复算结果；手改（含写死分母）一律判死。"""
+    errors = []
+    expected = serialize_ledger(ledger)
+    if not os.path.isfile(ledger_path):
+        errors.append("账本缺失：%s（先跑 --regen）" % ledger_path)
+        return expected, errors
+    with open(ledger_path, encoding="utf-8") as fh:
+        actual = fh.read()
+    if actual != expected:
+        errors.append("账本与复算不一致：%s（期望 sha256=%s，实际 sha256=%s）"
+                      % (ledger_path, hashlib.sha256(expected.encode()).hexdigest()[:16],
+                         hashlib.sha256(actual.encode()).hexdigest()[:16]))
+    # 显式识别「分母被写成整数常量」：生成物不该出现 total/denominator 行。
+    for m in re.finditer(r"^#\s*denominator\s+D(\d)\s*=\s*(\d+)\s*$", actual, re.M):
+        level, declared = "D" + m.group(1), int(m.group(2))
+        real = {"D1": ledger["totals"]["numbered"],
+                "D2": ledger["totals"]["with_meta"]["denominator"],
+                "D3": ledger["totals"]["all"]["denominator"]}.get(level)
+        if real is None:
+            errors.append("账本声明了未知口径 %s" % level)
+        elif declared != real:
+            errors.append("账本写死分母 %s=%d，清单推导为 %d（常量分母不许篡改）"
+                          % (level, declared, real))
+    return expected, errors
 
 
 def summary_of(ledger):
@@ -312,17 +372,17 @@ def summary_of(ledger):
     wm = t["with_meta"]
     al = t["all"]
     zeros = [r for r in ledger["checks"] + ledger.get("extras", [])
-             if r["coverage"] == "none"]
+             if r["coverage"] in ("none", "positive_only")]
     lines = [
-        "判据覆盖（仅 §9.1）：%d/%d（%.1f%%，其中 %d 判死 + %d 告警；按已实现 %d/%d）"
+        "判据遵守率（D1 仅 §9.1）：%d/%d（%.1f%%，其中 %d 判死 + %d 告警；按已实现 %d/%d）"
         % (t["negative"], t["numbered"], t["coverage_pct_of_numbered"],
            t["negative_fail_level"], t["negative_warn_level"],
            t["negative"], t["implemented"]),
-        "判据覆盖（含元检查）：%d/%d（%.1f%%）" %
+        "判据遵守率（D2 含元检查）：%d/%d（%.1f%%）" %
         (wm["negative"], wm["denominator"], wm["coverage_pct"]),
-        "判据覆盖（含 §9.3 预算检查）：%d/%d（%.1f%%）" %
+        "判据遵守率（D3 含 §9.3 预算检查）：%d/%d（%.1f%%）" %
         (al["negative"], al["denominator"], al["coverage_pct"]),
-        "  - 分解：§9.1 %d/%d + 元检查 %d/%d + 预算真源 %d/%d"
+        "  - 分解：D1 %d/%d + 元检查 %d/%d + 预算真源 %d/%d"
         % (t["negative"], t["numbered"],
            sum(1 for r in ledger.get("extras", [])
                if r["kind"] == "meta" and r["coverage"] == "negative"),
@@ -332,26 +392,22 @@ def summary_of(ledger):
            sum(1 for r in ledger.get("extras", []) if r["kind"] == "aux")),
         "  - §9.1 三档：负例 %d · 只有正例 %d · 无用例 %d"
         % (t["negative"], t["positive_only"], t["none"]),
+        "  - 状态：PASS %d · SKIP %d · EXCLUDED %d（分母只数 counted=yes）"
+        % (t["status"]["PASS"], t["status"]["SKIP"], t["status"]["EXCLUDED"]),
     ]
     if zeros:
-        lines.append("  - coverage=0：%s"
-                     % "；".join("%s（%s）" % (r["id"], r["title"]) for r in zeros))
+        lines.append("  - 未覆盖（SKIP）：%s"
+                     % "；".join("%s（%s）" % (r["id"], r["reason"]) for r in zeros))
     else:
-        lines.append("  - coverage=0：无")
-    aux_bad = [a for a in ledger["auxiliary"] if a["negative_cases"]]
-    if aux_bad:
-        lines.append("  - 另列（不进任何分母）：%s"
-                     % "；".join("%s %s" % (a["id"], a["note"]) for a in aux_bad))
-    counted = [m for m in ledger["meta"] if m["counted_in_selftest_total"]]
-    lines.append("  - 元检查 %d 个：%d 个进自测分母（NOISE/INVOKE），%d 个进账本分母"
-                 "（§9.3-DOC/LOCALE/PROSE/SPEC），%d 个暂无判死用例"
-                 % (len(ledger["meta"]), len(counted),
-                    len([m for m in ledger["meta"] if m["id"].startswith("§9.3-")]),
-                    len([m for m in ledger["meta"]
-                         if not m["counted_in_selftest_total"]
-                         and not m["id"].startswith("§9.3-")])))
+        lines.append("  - 未覆盖（SKIP）：无")
+    excluded = ledger.get("excluded") or []
+    if excluded:
+        lines.append("  - 不计入分母（EXCLUDED）：%s"
+                     % "；".join("%s（%s）" % (r["id"], r["reason"]) for r in excluded))
     if ledger["design_check"]["status"] == "checked":
         lines.append("  - DESIGN §9.1 对齐：%s 行" % ledger["design_check"]["rows"])
+    else:
+        lines.append("  - DESIGN §9.1 对齐：SKIP（%s）" % ledger["design_check"]["reason"])
     for e in ledger["errors"]:
         lines.append("  ❌ " + e)
     return "\n".join(lines)
@@ -386,106 +442,238 @@ def _design_text(n):
     return "\n".join(rows)
 
 
-def selftest():
-    cases_path = DEFAULT_CASES
-    for i, a in enumerate(sys.argv):
-        if a == "--cases" and i + 1 < len(sys.argv):
-            cases_path = sys.argv[i + 1]
+def _tsv_without(src, dst, ids):
+    with open(src, encoding="utf-8") as fh:
+        lines = [l for l in fh if not any(l.startswith(i + "\t") for i in ids)]
+    with open(dst, "w", encoding="utf-8") as fh:
+        fh.write("".join(lines))
+
+
+def _load_design(path):
+    if path and os.path.isfile(path):
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    return None
+
+
+def _read(path):
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def negctl(criteria_path, ledger_path, cases_path, design_path=None, quiet=False):
+    """三条负控必须真判死。返回 (killed, results)。"""
+    tmp = tempfile.mkdtemp(prefix="keel-negctl-")
+    cases, meta = load_cases(cases_path)
+    design = _load_design(design_path)
+    results = []
+
+    def run(name, crit_path, led_path, design_text, case_list=None):
+        rows = load_criteria(crit_path)
+        led = build(rows, case_list if case_list is not None else cases,
+                    design_text=design_text, meta_cases=meta)
+        _, errs = check_ledger(led, led_path)
+        bad = led["errors"] + errs
+        results.append((name, bool(bad), bad))
+        if not quiet:
+            print("[%s] %s" % ("KILLED" if bad else "SURVIVED", name))
+            for e in bad[:4]:
+                print("    " + e)
+
+    # 1) 分母被写成整数常量：清单与账本都是 18 行，只有头部写死 D1=19。
+    #    这一格必须只由「常量分母」判死，否则证明不了常量本身被拦。
+    c1 = os.path.join(tmp, "criteria-const.tsv")
+    _tsv_without(criteria_path, c1, ["§9.1-19"])
+    tmpc1, (cases1, meta1) = _copy_without(cases_path, ["45", "46", "47", "48"])
+    rows1 = load_criteria(c1)
+    led1 = build(rows1, cases1, design_text=_design_text(18), meta_cases=meta1)
+    l1 = os.path.join(tmp, "ledger-const.tsv")
+    with open(l1, "w", encoding="utf-8") as fh:
+        fh.write("# denominator D1=19\n" + serialize_ledger(led1))
+    run("负控1 恒定分母（清单 18 行 + 写死 D1=19）", c1, l1, _design_text(18), cases1)
+    shutil.rmtree(tmpc1, ignore_errors=True)
+
+    # 2) 某条判据被悄悄删掉：清单、用例、账本三处都少 §9.1-9，账本自洽，
+    #    但 DESIGN 仍是 19 行——只靠「重新生成账本」藏不住。
+    c2 = os.path.join(tmp, "criteria-cut.tsv")
+    _tsv_without(criteria_path, c2, ["§9.1-9"])
+    tmpc2, (cases2, meta2) = _copy_without(cases_path, ["16"])
+    rows2 = load_criteria(c2)
+    led2 = build(rows2, cases2, design_text=design, meta_cases=meta2)
+    l2 = os.path.join(tmp, "ledger-cut.tsv")
+    with open(l2, "w", encoding="utf-8") as fh:
+        fh.write(serialize_ledger(led2))
+    text2 = design if design is not None else _design_text(19)
+    run("负控2 悄悄删判据（三处对齐但 DESIGN 仍 19 行）", c2, l2, text2, cases2)
+    shutil.rmtree(tmpc2, ignore_errors=True)
+
+    # 3) 账本与规格条目数量对不上：DESIGN §9.1 有 20 行。
+    run("负控3 规格条目数不符（DESIGN 20 行 vs 账本 19）",
+        criteria_path, ledger_path, _design_text(20))
+
+    shutil.rmtree(tmp, ignore_errors=True)
+    killed = sum(1 for _, ok, _ in results if ok)
+    if not quiet:
+        print("=" * 60)
+        print("%s：负控 %d/%d 判死" % ("✅" if killed == len(results) else "❌",
+                                     killed, len(results)))
+    return killed, results
+
+
+def selftest(criteria_path, cases_path):
     good = 0
     total = 0
-
+    criteria = load_criteria(criteria_path)
     base, meta = load_cases(cases_path)
-    led = build(base, meta_cases=meta)
+    design = _load_design(DEFAULT_DESIGN)
+    led = build(criteria, base, design_text=design, meta_cases=meta)
     total += 1
-    good += _run_fixture("真实用例：19 项、18 项有负例、1 项无",
-                         led["totals"]["numbered"] == 19
-                         and led["totals"]["negative"] == 18
-                         and led["totals"]["none"] == 1
-                         and not led["errors"])
-    # v3.14.0：元检查进分母。23 = 19 + DOC/SPEC-DIGEST/LOCALE/PROSE；24 = 再加预算真源。
+    good += _run_fixture("真实清单：§9.1 连续、全部 counted=yes、无结构错误",
+                         not led["errors"]
+                         and led["totals"]["numbered"] == len([r for r in criteria
+                                                               if r["section"] == "§9.1"])
+                         and all(r["counted"] == "yes" for r in criteria
+                                 if r["section"] == "§9.1"))
     total += 1
-    good += _run_fixture("含元检查 22/23 与 §9.3 全量 23/24 同时给出",
-                         led["totals"]["with_meta"]["denominator"] == 23
-                         and led["totals"]["with_meta"]["negative"] == 22
-                         and led["totals"]["all"]["denominator"] == 24
-                         and led["totals"]["all"]["negative"] == 23
-                         and led["totals"]["with_meta"]["coverage_pct"] == 95.7
-                         and led["totals"]["all"]["coverage_pct"] == 95.8)
+    good += _run_fixture("三个分母由 counted=yes 行数推导，且 D1<D2<D3",
+                         led["totals"]["with_meta"]["denominator"]
+                         == led["totals"]["numbered"]
+                         + sum(1 for r in criteria if r["kind"] == "meta" and r["counted"] == "yes")
+                         and led["totals"]["all"]["denominator"]
+                         == led["totals"]["with_meta"]["denominator"]
+                         + sum(1 for r in criteria if r["kind"] == "aux" and r["counted"] == "yes")
+                         and led["totals"]["all"]["denominator"]
+                         == sum(1 for r in criteria if r["counted"] == "yes"))
 
-    # 反向验证（关键）：删掉 §9.1-19 的 4 条判死用例，账本必须变。
+    expected, errs = check_ledger(led, DEFAULT_LEDGER)
+    total += 1
+    good += _run_fixture("已提交 ledger.tsv 与复算逐字节一致", not errs)
+
     tmp, (cut, cut_meta) = _copy_without(cases_path, ["45", "46", "47", "48"])
-    led_cut = build(cut, meta_cases=cut_meta)
+    led_cut = build(criteria, cut, design_text=design, meta_cases=cut_meta)
     row19 = [r for r in led_cut["checks"] if r["id"] == "§9.1-19"][0]
     total += 1
-    good += _run_fixture("删掉 §9.1-19 的 4 条用例后 coverage 变 none、负例 18→17",
+    good += _run_fixture("删掉 §9.1-19 的 4 条用例后 coverage 变 none、分子 -1",
                          row19["coverage"] == "none"
                          and row19["cases"] == 0
-                         and led_cut["totals"]["negative"] == 17
-                         and led_cut["totals"]["none"] == 2)
+                         and led_cut["totals"]["negative"] == led["totals"]["negative"] - 1)
     shutil.rmtree(tmp, ignore_errors=True)
 
-    # 元检查的反向验证：删掉 §9.3-DOC 的判死用例，分母不变、分子必须降。
     tmp2, (cut2, cut2_meta) = _copy_without(cases_path, ["§9.3-DOC"])
-    led_cut2 = build(cut2, meta_cases=cut2_meta)
+    led_cut2 = build(criteria, cut2, design_text=design, meta_cases=cut2_meta)
     doc_row = [r for r in led_cut2["extras"] if r["id"] == "§9.3-DOC"][0]
     total += 1
-    good += _run_fixture("删掉 §9.3-DOC 判死用例 → coverage=none、含元检查 22→21",
+    good += _run_fixture("删掉 §9.3-DOC 判死用例 → SKIP，D2 分子 -1",
                          doc_row["coverage"] == "none"
-                         and led_cut2["totals"]["with_meta"]["denominator"] == 23
-                         and led_cut2["totals"]["with_meta"]["negative"] == 21)
+                         and led_cut2["totals"]["with_meta"]["denominator"]
+                         == led["totals"]["with_meta"]["denominator"]
+                         and led_cut2["totals"]["with_meta"]["negative"]
+                         == led["totals"]["with_meta"]["negative"] - 1)
     shutil.rmtree(tmp2, ignore_errors=True)
 
-    # 预算真源（§9.3-BUDGET）：删掉用例 20 后必须掉出「全部」口径。
     tmp3, (cut3, cut3_meta) = _copy_without(cases_path, ["20"])
-    led_cut3 = build(cut3, meta_cases=cut3_meta)
+    led_cut3 = build(criteria, cut3, design_text=design, meta_cases=cut3_meta)
     bud = [r for r in led_cut3["extras"] if r["id"] == "§9.3-BUDGET"][0]
     total += 1
-    good += _run_fixture("删掉 §9.3-BUDGET 判死用例 → 全部口径 23/24→22/24",
+    good += _run_fixture("删掉 §9.3-BUDGET 判死用例 → D3 分子 -1",
                          bud["coverage"] == "none"
-                         and led_cut3["totals"]["all"]["negative"] == 22)
+                         and led_cut3["totals"]["all"]["negative"]
+                         == led["totals"]["all"]["negative"] - 1)
     shutil.rmtree(tmp3, ignore_errors=True)
 
-    # 只有正例：给扩展位塞一条 rc=0 空期望的基线，应判 positive_only 而非 negative。
-    led_pos = build(base + [("x1", "基线", "§9.1-15", [], 0, None)], meta_cases=meta)
-    row15 = [r for r in led_pos["checks"] if r["id"] == "§9.1-15"][0]
+    led_pos = build(criteria + [{"id": "x1", "section": "§9.1", "level": "fail",
+                                 "kind": "rule", "counted": "yes", "title": "基线"}],
+                    base + [("x1c", "基线", "x1", [], 0, None)], meta_cases=meta)
     total += 1
-    good += _run_fixture("只有正例 → coverage=positive_only（不算覆盖）",
-                         row15["coverage"] == "positive_only"
-                         and led_pos["totals"]["positive_only"] == 1
-                         and led_pos["totals"]["none"] == 0)
+    good += _run_fixture("只有正例 → SKIP（不算 PASS）",
+                         any(r["id"] == "x1" and r["status"] == "SKIP"
+                             for r in led_pos["checks"]))
 
-    # warn 级：基线不算覆盖，必须真的断言告警文本。
     no_warn = [c for c in base if c[0] != "26"]
-    led_w0 = build(no_warn, meta_cases=meta)
-    led_w1 = build(no_warn + [("x2", "告警", "§9.1-12", ["stale"], 0, None)], meta_cases=meta)
-    r0 = [r for r in led_w0["checks"] if r["id"] == "§9.1-12"][0]
-    r1 = [r for r in led_w1["checks"] if r["id"] == "§9.1-12"][0]
+    led_w0 = build(criteria, no_warn, meta_cases=meta)
     total += 1
-    good += _run_fixture("warn 级：无告警用例=none，有告警断言=negative",
-                         r0["coverage"] == "none" and r1["coverage"] == "negative")
+    good += _run_fixture("warn 级：无告警断言 → SKIP", any(
+        r["id"] == "§9.1-12" and r["coverage"] == "none" for r in led_w0["checks"]))
 
-    # 未登记编号必须 FAIL，不能静默忽略。
-    led_unknown = build(base + [("x3", "未知", "§9.1-99", ["x"], 1, None)], meta_cases=meta)
+    led_unknown = build(criteria, base + [("x3", "未知", "§9.1-99", ["x"], 1, None)],
+                        meta_cases=meta)
     total += 1
     good += _run_fixture("未登记 §9.1-99 → 报错",
                          any("§9.1-99" in e for e in led_unknown["errors"]))
-    led_unknown3 = build(base, meta_cases=meta + [("mX", "未知", "§9.3-XXX", None)])
+    led_unknown3 = build(criteria, base, meta_cases=meta + [("mX", "未知", "§9.3-XXX", None)])
     total += 1
     good += _run_fixture("未登记 §9.3-XXX 的判死用例 → 报错",
                          any("§9.3-XXX" in e for e in led_unknown3["errors"]))
 
-    # DESIGN 行数不一致必须 FAIL。
-    led_bad_doc = build(base, design_text=_design_text(18), meta_cases=meta)
     total += 1
-    good += _run_fixture("DESIGN §9.1 只有 18 行 → 报错",
-                         any("DESIGN" in e for e in led_bad_doc["errors"]))
-    led_ok_doc = build(base, design_text=_design_text(19), meta_cases=meta)
+    good += _run_fixture("DESIGN §9.1 18 行 → 报错",
+                         any("DESIGN" in e for e in build(
+                             criteria, base, design_text=_design_text(18),
+                             meta_cases=meta)["errors"]))
     total += 1
-    good += _run_fixture("DESIGN §9.1 19 行 → 通过", not led_ok_doc["errors"])
+    good += _run_fixture("DESIGN §9.1 19 行 → 通过",
+                         not build(criteria, base, design_text=_design_text(19),
+                                   meta_cases=meta)["errors"])
+
+    excl = [dict(r) for r in criteria]
+    [r for r in excl if r["id"] == "§9.1-15"][0]["counted"] = "no"
+    total += 1
+    good += _run_fixture("把 §9.1 判据移出分母 → 报错（不许为好看改分母）",
+                         any("§9.1-15" in e and "不得 counted=no" in e
+                             for e in build(excl, base, meta_cases=meta)["errors"]))
+
+    total += 1
+    bad_led = os.path.join(tempfile.mkdtemp(prefix="keel-led-"), "ledger.tsv")
+    with open(bad_led, "w", encoding="utf-8") as fh:
+        fh.write(serialize_ledger(led).replace("§9.1-1\t", "§9.1-1X\t", 1))
+    _, bad_errs = check_ledger(led, bad_led)
+    good += _run_fixture("手改账本（改判据 ID）→ --check 判死", bool(bad_errs))
+    shutil.rmtree(os.path.dirname(bad_led), ignore_errors=True)
+
+    killed, _ = negctl(criteria_path, DEFAULT_LEDGER, cases_path, DEFAULT_DESIGN, quiet=True)
+    total += 1
+    good += _run_fixture("三条负控全部判死（恒定分母 / 悄悄删判据 / 规格条数不符）",
+                         killed == 3)
 
     print("=" * 60)
     print("%s：判据账本自检 %d/%d" % ("✅" if good == total else "❌", good, total))
     return 1 if good != total else 0
+
+
+def _print_recompute(ledger, criteria_path, ledger_path, expected, errs):
+    print("判据账本复算 · criteria=%s · ledger=%s" % (criteria_path, ledger_path))
+    print("criteria.tsv sha256 = %s" % sha256_of(criteria_path))
+    if os.path.isfile(ledger_path):
+        print("ledger.tsv   sha256 = %s" % sha256_of(ledger_path))
+    print("期望 ledger  sha256 = %s" % hashlib.sha256(expected.encode()).hexdigest())
+    for key, label in (("numbered_ids", "D1（仅 §9.1）"),
+                       ("with_meta", "D2（+元检查）"),
+                       ("all", "D3（+预算真源）")):
+        if key == "numbered_ids":
+            ids = ledger["scope"]["numbered_ids"]
+            neg = ledger["totals"]["negative"]
+        else:
+            ids = ledger["totals"][key]["denominator_ids"]
+            neg = ledger["totals"][key]["negative"]
+        print("%s：%d 条 → %s" % (label, len(ids), " ".join(ids)))
+        print("    判据遵守率 %d/%d = %.1f%%" % (neg, len(ids), neg * 100.0 / len(ids)))
+    skips = [r for r in ledger["checks"] + ledger["extras"] if r["status"] == "SKIP"]
+    print("SKIP（进分母、不进分子）：%s"
+          % ("；".join("%s（%s）" % (r["id"], r["reason"]) for r in skips) or "无"))
+    excl = ledger["excluded"]
+    print("EXCLUDED（不进分母）：%s"
+          % ("；".join("%s（%s）" % (r["id"], r["reason"]) for r in excl) or "无"))
+    if ledger["design_check"]["status"] == "checked":
+        print("DESIGN §9.1 对齐：%d 行，已校验" % ledger["design_check"]["rows"])
+    else:
+        print("DESIGN §9.1 对齐：SKIP（%s）" % ledger["design_check"]["reason"])
+    if errs:
+        for e in errs:
+            print("❌ " + e)
+        print("结论：复算与已提交账本不一致（rc=1）")
+    else:
+        print("结论：复算与已提交账本逐字节一致（rc=0）")
+    return 0 if not errs else 1
 
 
 def main():
@@ -494,23 +682,59 @@ def main():
     ap.add_argument("--summary", action="store_true")
     ap.add_argument("--out")
     ap.add_argument("--cases", default=DEFAULT_CASES)
+    ap.add_argument("--criteria", default=DEFAULT_CRITERIA)
+    ap.add_argument("--ledger", default=DEFAULT_LEDGER)
     ap.add_argument("--design", default=None)
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--recompute", action="store_true")
+    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--regen", action="store_true")
+    ap.add_argument("--negctl", action="store_true")
     a = ap.parse_args()
     if a.selftest:
-        return selftest()
+        return selftest(a.criteria, a.cases)
+    if a.negctl:
+        killed, _ = negctl(a.criteria, a.ledger, a.cases, a.design or DEFAULT_DESIGN)
+        return 0 if killed == 3 else 1
 
+    criteria = load_criteria(a.criteria)
     cases, meta_cases = load_cases(a.cases)
-    design = None
     design_path = a.design
     if design_path is None and os.path.exists(DEFAULT_DESIGN):
         design_path = DEFAULT_DESIGN
-    if design_path and os.path.exists(design_path):
-        with open(design_path, encoding="utf-8") as fh:
-            design = fh.read()
-    ledger = build(cases, design_text=design, meta_cases=meta_cases)
+    design = _load_design(design_path)
+    ledger = build(criteria, cases, design_text=design, meta_cases=meta_cases)
     if design_path:
         ledger["design_check"]["path"] = design_path
+
+    expected, ledger_errs = check_ledger(ledger, a.ledger)
+    ledger["artifacts"] = {
+        "criteria": a.criteria,
+        "criteria_sha256": sha256_of(a.criteria),
+        "ledger": a.ledger,
+        "ledger_sha256": sha256_of(a.ledger) if os.path.isfile(a.ledger) else None,
+        "expected_ledger_sha256": hashlib.sha256(expected.encode()).hexdigest(),
+    }
+    if a.regen:
+        if ledger["errors"]:
+            for e in ledger["errors"]:
+                print("❌ " + e, file=sys.stderr)
+            return 1
+        with open(a.ledger, "w", encoding="utf-8") as fh:
+            fh.write(expected)
+        print("已生成 %s（sha256=%s）"
+              % (a.ledger, hashlib.sha256(expected.encode()).hexdigest()))
+        return 0
+    if a.recompute:
+        return _print_recompute(ledger, a.criteria, a.ledger, expected,
+                                ledger["errors"] + ledger_errs)
+    if a.check:
+        errs = ledger["errors"] + ledger_errs
+        for e in errs:
+            print("❌ " + e)
+        if not errs:
+            print("✅ 账本自洽：%s" % a.ledger)
+        return 1 if errs else 0
 
     if a.out:
         with open(a.out, "w", encoding="utf-8") as fh:

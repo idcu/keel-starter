@@ -1,0 +1,30 @@
+# keel-criteria-ledger v1
+# 口径：DESIGN §12.3「判据账本口径」；生成：checks/verify/checks-ledger.py --regen
+# 分母由本账本 counted=yes 的行数推导，不写常量；复算：checks-ledger.py --recompute
+# 列：id<TAB>section<TAB>level<TAB>kind<TAB>counted<TAB>status<TAB>coverage<TAB>cases<TAB>negative_cases<TAB>evidence<TAB>reason
+§9.1-1	§9.1	fail	rule	yes	PASS	negative	5	4	CASES:01,02,03,25,51	-
+§9.1-2	§9.1	fail	rule	yes	PASS	negative	4	4	CASES:04,05,06,11	-
+§9.1-3	§9.1	fail	rule	yes	PASS	negative	1	1	CASES:22	-
+§9.1-4	§9.1	fail	rule	yes	PASS	negative	2	2	CASES:23,37	-
+§9.1-5	§9.1	fail	rule	yes	PASS	negative	1	1	CASES:24	-
+§9.1-6	§9.1	fail	rule	yes	PASS	negative	4	4	CASES:07,08,09,10	-
+§9.1-7	§9.1	fail	rule	yes	PASS	negative	3	3	CASES:14,15,34	-
+§9.1-8	§9.1	fail	rule	yes	PASS	negative	2	2	CASES:12,13	-
+§9.1-9	§9.1	fail	rule	yes	PASS	negative	1	1	CASES:16	-
+§9.1-10	§9.1	fail	rule	yes	PASS	negative	6	6	CASES:17,18,19,21,49,50	-
+§9.1-11	§9.1	fail	rule	yes	PASS	negative	1	1	CASES:28	-
+§9.1-12	§9.1	warn	rule	yes	PASS	negative	1	1	CASES:26	-
+§9.1-13	§9.1	warn	rule	yes	PASS	negative	1	1	CASES:27	-
+§9.1-14	§9.1	fail	rule	yes	PASS	negative	1	1	CASES:31	-
+§9.1-15	§9.1	extension	rule	yes	SKIP	none	0	0	none	扩展位（DESIGN §9.2）：内核不实现，需项目侧判据
+§9.1-16	§9.1	fail	rule	yes	PASS	negative	1	1	CASES:36	-
+§9.1-17	§9.1	fail	rule	yes	PASS	negative	5	3	CASES:39,40,41,42,52	-
+§9.1-18	§9.1	fail	rule	yes	PASS	negative	2	2	CASES:43,44	-
+§9.1-19	§9.1	fail	rule	yes	PASS	negative	4	4	CASES:45,46,47,48	-
+§9.3-DOC	§9.3	fail	meta	yes	PASS	negative	1	1	META:§9.3-DOC	-
+§9.3-LOCALE	§9.3	fail	meta	yes	PASS	negative	1	1	META:§9.3-LOCALE	-
+§9.3-PROSE	§9.3	fail	meta	yes	PASS	negative	1	1	META:§9.3-PROSE	-
+§9.3-SPEC	§9.3	fail	meta	yes	PASS	negative	1	1	META:§9.3-SPEC	-
+§9.3-BUDGET	§9.3	fail	aux	yes	PASS	negative	1	1	CASES:20	-
+NOISE	§9.3	meta	meta	no	EXCLUDED	excluded	0	0	none	不计入分母：无独立判死用例（进自测分母）
+INVOKE	§9.3	meta	meta	no	EXCLUDED	excluded	0	0	none	不计入分母：无独立判死用例（进自测分母）

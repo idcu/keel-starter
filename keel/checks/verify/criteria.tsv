@@ -1,0 +1,30 @@
+# keel-criteria v1 —— 判据枚举真源（口径见 DESIGN §12.3「判据账本口径」）
+# 列：id<TAB>section<TAB>level<TAB>kind<TAB>counted<TAB>title
+# counted=yes 的行进入分母；counted=no 的行必须写清排除理由，且不得是 §9.1 判据。
+# 分母 = 各口径下 counted=yes 的行数，由本文件推导，脚本里不得写字面量。
+§9.1-1	§9.1	fail	rule	yes	大小：行数 / 字节 / 单行字节 / 单目录文件数超限
+§9.1-2	§9.1	fail	rule	yes	frontmatter：缺失、字段缺失、行数 / 字节超限
+§9.1-3	§9.1	fail	rule	yes	死链：@路径 与 markdown 链接指向不存在的文件
+§9.1-4	§9.1	fail	rule	yes	孤儿：热区文档未被任何热区文档以链接引用
+§9.1-5	§9.1	fail	rule	yes	坑条目三段式（症状 / 根因 / 正解）缺失
+§9.1-6	§9.1	fail	rule	yes	值域：status / severity / keywords / last-verified / triggers
+§9.1-7	§9.1	fail	rule	yes	登记：坑未进 pitfalls/INDEX；域索引含非表格正文
+§9.1-8	§9.1	fail	rule	yes	命名：热区文件名含日期 / 大写 / 下划线 / 空格
+§9.1-9	§9.1	fail	rule	yes	循环引用：md → md 引用图存在环
+§9.1-10	§9.1	fail	rule	yes	必读与点火：必读文件缺失、根索引缺字段、锚点不一致
+§9.1-11	§9.1	fail	rule	yes	状态机：frozen 期间新增 contracts；单月例外决策 >2
+§9.1-12	§9.1	warn	rule	yes	陈旧：last-verified 超 30 天；NOW 的 updated 超 7 天
+§9.1-13	§9.1	warn	rule	yes	待蒸馏：triggers ≥ 3 且 status ≠ distilled
+§9.1-14	§9.1	fail	rule	yes	取代关系：decisions/* 的 superseded-by 指向不存在文件
+§9.1-15	§9.1	extension	rule	yes	契约漂移 / 术语混用（项目扩展位，内核不实现）
+§9.1-16	§9.1	fail	rule	yes	闭环钩子本体：pre-commit / commit-msg 缺失或不可执行
+§9.1-17	§9.1	fail	rule	yes	版本副本一致：keel-version / CHANGELOG / README 徽章
+§9.1-18	§9.1	fail	rule	yes	跨平台底线：CRLF；仅大小写不同的路径
+§9.1-19	§9.1	fail	rule	yes	写路径收敛：禁止裸 cp/mv/install、sed -i、重定向直写
+§9.3-DOC	§9.3	fail	meta	yes	脚本与 DESIGN §9.3 逐字一致
+§9.3-LOCALE	§9.3	fail	meta	yes	段 3 LC_ALL 不泄漏；段 4 与 locale 无关
+§9.3-PROSE	§9.3	fail	meta	yes	门面散文数字与真源一致
+§9.3-SPEC	§9.3	fail	meta	yes	判据脚本与 checks/manifest.tsv 的 sha256 一致
+§9.3-BUDGET	§9.3	fail	aux	yes	预算真源 budget.env 缺失即 fail
+NOISE	§9.3	meta	meta	no	全部用例 stderr 必须为空或命中显式豁免；进自测分母，不进账本分母
+INVOKE	§9.3	meta	meta	no	lint 入参形式无关（相对 / 绝对 / . / 带空格）；进自测分母，不进账本分母
