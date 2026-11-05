@@ -65,6 +65,12 @@ def scope_section(text, version):
 
 REQUIRED_SHAS = ["checks/keel-lint.sh", "checks/test-lint.py",
                  "checks/verify/checks-ledger.py", "checks/verify/verify.py"]
+_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _valid_sha(v):
+    """sha256 必须是 64 位小写十六进制；None / 空串 / 长度不符都算「未绑定」。"""
+    return isinstance(v, str) and bool(_SHA_RE.match(v))
 
 
 def _git(repo, *args):
@@ -101,6 +107,14 @@ def _provenance_problems(prov, repo=None):
     missing = [r for r in REQUIRED_SHAS if r not in shas]
     if missing:
         problems.append("provenance 少记录判据文件：%s" % "、".join(missing))
+    # v3.17.0：null / 长度不符 = 清单没有绑定该判据文件，必须判死。
+    # 旧实现 `elif want and …` 对 None 直接放行，于是「4 个 sha 全 null」的清单
+    # 也能 PASS——实际发生在 CHECK_FILES 路径拼错时，null 恒真却无人发现。
+    bad_sha = [r for r in REQUIRED_SHAS
+               if r not in missing and not _valid_sha(shas.get(r))]
+    if bad_sha:
+        problems.append("判据文件 sha256 缺失或非法（清单未绑定）：%s"
+                        % "、".join(bad_sha))
     if not prov.get("commit"):
         problems.append("provenance.commit 为空（生成清单时不在 git 仓库里？）")
     dirty_flag = prov.get("dirty")
@@ -131,7 +145,7 @@ def _provenance_problems(prov, repo=None):
                 path = os.path.join(repo, rel)
             if not os.path.isfile(path):
                 problems.append("被检判据文件不存在：%s" % rel)
-            elif want and _sha(path) != want:
+            elif _valid_sha(want) and _sha(path) != want:
                 problems.append("%s 的 sha256 与清单不符（文件已改，清单已过期）" % rel)
     return problems
 
@@ -515,6 +529,8 @@ def selftest():
     ledger_extra["checks_ledger"]["totals"]["with_meta"]["denominator"] = 2
     prov_missing = _mk_report([("PASS", "PASS")], 0)
     prov_missing.pop("provenance")
+    prov_null = _mk_report([("PASS", "PASS")], 0)
+    prov_null["provenance"]["checks_sha256"] = {r: None for r in REQUIRED_SHAS}
     wiring_missing = _mk_report([("PASS", "PASS")], 0)
     wiring_missing.pop("wiring")
     wiring_zero = _mk_report([("PASS", "PASS")], 0)
@@ -547,6 +563,8 @@ def selftest():
         ("缺 checks_ledger 小节必须被抓", ledger_missing, "全部通过", False),
         ("含元检查口径的分母对不上必须被抓", ledger_extra, "全部通过", False),
         ("缺 provenance 小节必须被抓", prov_missing, "全部通过", False),
+        ("provenance 的 sha256 全为 null 必须被抓（清单未绑定判据）",
+         prov_null, "全部通过", False),
         ("缺 wiring 小节必须被抓", wiring_missing, "全部通过", False),
         ("有入口 wiring=0 却写「全部通过」必须被抓", wiring_zero, "全部通过", False),
         ("有入口 wiring=0 且写明 wiring=0 必须放行", wiring_zero,

@@ -267,7 +267,11 @@ def provenance():
     dirty = [x for x in _git(REPO, "status", "--porcelain").splitlines() if x]
     shas = {}
     for rel in CHECK_FILES:
-        path = os.path.join(REPO, rel)
+        # 键相对 `keel/`（与 check-verify-report.py 的 REQUIRED_SHAS 同源）。
+        # v3.17.0 修复：此前用 REPO（= keel 的父目录）拼路径，而 REPO 下没有
+        # `checks/…`，四个 sha 恒为 null；清单却仍打印「已记录」，校验器又因
+        # `elif want` 对 null 放行——证据链最后一公里是空的。
+        path = os.path.join(KEEL, rel)
         if os.path.isfile(path):
             with open(path, "rb") as fh:
                 shas[rel] = hashlib.sha256(fh.read()).hexdigest()
@@ -480,8 +484,14 @@ def main():
                  t["with_meta"]["negative"], t["with_meta"]["denominator"],
                  t["negative"], t["numbered"], "、".join(zeros) or "无"))
     p = report["provenance"]
-    print("   清单绑定：commit %s · dirty %d 个文件 · 4 个判据文件 sha256 已记录 · %s"
-          % ((p["commit"] or "未知")[:12], p["dirty_files"], p["generated_at"]))
+    recorded = [v for v in p["checks_sha256"].values() if v]
+    bind_head = ("%d/%d 个判据文件 sha256 已记录" % (len(recorded), len(CHECK_FILES))
+                 if len(recorded) == len(CHECK_FILES)
+                 else "⚠️ 判据文件 sha256 %d/%d（缺失的判据无法复核）"
+                      % (len(recorded), len(CHECK_FILES)))
+    print("   清单绑定：commit %s · dirty %d 个文件 · %s · %s"
+          % ((p["commit"] or "未知")[:12], p["dirty_files"], bind_head,
+             p["generated_at"]))
     if total["failed"] or (a.strict and total["skipped"]):
         return 1
     return 0
