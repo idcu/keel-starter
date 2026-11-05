@@ -2,9 +2,9 @@
 # 分类: kernel(覆盖) | merge(只改版本行) | preserve(不动) | additive(父目录在才补)
 # 字段: 分类<TAB>相对路径<TAB>权限(可空)<TAB>sha256(仅 kernel)
 kernel	.gitattributes	644	d60810b95da3ba25671603182d196041c8e34a398131ea4e26c4e93c9be1b455
-kernel	checks/keel-lint.sh	755	c828152e6c66f2ddc93e4f2cd16fa59424657a05295fc4b4b04dc10d0d3767e3
+kernel	checks/keel-lint.sh	755	61eacb5bbb4c682f810ffa2a8ecb2c22bdb6d0e488560e857ea99a0c6d6f3057
 kernel	checks/test-lint.sh	755	93f5861d880a7dc4ba225527e708e0c26f869e832e1eaa8cb36e933b14a7f4d3
-kernel	checks/test-lint.py	644	19e38a5405a19b57dd00b93d7d3c6bd95a2b8eed2b99ac3991da2721d7a33de3
+kernel	checks/test-lint.py	644	92faf8c70e304a95c3dada5f2c1b64d0988a0aa58941be2930145c418661850d
 kernel	checks/keel-upgrade.sh	755	d2c01f9f7fd51482b8ee4cfc19cfe09767dbac1326b3451a3591dba6b401bc82
 kernel	checks/compliance.sh	755	59c40b3729a6abfe93ab16bf180c961a943ae3f3337075100eac7e09bfd05d09
 kernel	checks/load-estimate.sh	755	c73b2c5fec37ac3c92e77b6016b644828f986609929f3c6368d530f43d3a0e48
@@ -23,7 +23,7 @@ kernel	checks/test-upgrade.py	644	9f295de972e700c7d220b82bc09c29dd9674642b74f3f9
 kernel	checks/matrix/test-upgrade-matrix.sh	755	16d720da56a7c5d247cd59faffd86fceb6f1a1bfe3f90ef3170f62a5e5533fa0
 kernel	checks/matrix/test-upgrade-matrix.py	644	c525374c52b633da5299cd57a3f94ba983078ec3348e21c6d1767ce566e189b0
 kernel	checks/verify/check-verify-report.py	644	0e9de014f2b562b0cf46d24835015c2a55524066ae5c1f977810db0d68fed3ef
-kernel	checks/verify/checks-ledger.py	644	66f48a458a282b65b108da4aa4908ae0764e7d00e8e1337e676e49dea7b90e83
+kernel	checks/verify/checks-ledger.py	644	966496ffb2cb882752f18b157daa064f626bff14eddf94d2f3215bdb97bb5f1b
 kernel	checks/verify/verify.py	644	574f02afa91e5c8391b559e228dcc8e9334a8c99d54068d30ff58e9d6aa9d3e5
 kernel	checks/verify/verify.sh	755	cbf0168723b0eaeb304cf44b2b4430c29f26436a3147501584c1f651e081ae2a
 kernel	checks/hooks/pre-commit	755	9920408d87c4f72d9d4b89a5b8ddd9102b63eb9318fa1c6dc05677fff908c56b

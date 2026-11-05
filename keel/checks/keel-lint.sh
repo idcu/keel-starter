@@ -373,6 +373,7 @@ done > "$tmp/dirs" 2>/dev/null
 # 每个目录一次 ls 仍是 per-dir fork；这里用一次 find 输出全部条目后 awk 按目录聚合
 if [ -s "$tmp/dirs" ]; then
   find "$KEEL_DIR" -type f 2>/dev/null | awk -v K="$KEEL_DIR" -v MAXD="$MAX_DIR_FILES" '
+    $0 ~ /\/(archive|NOW-history)\// { next }
     { p=$0; sub("/[^/]*$", "", p); if (p!=K) cnt[p]++ }
     END { for (d in cnt) if (cnt[d] > MAXD) {
              r=d; sub("^" K "/", "", r)
@@ -870,7 +871,9 @@ if [ -f "$VER_IDX" ]; then
       # 副本一：根 CHANGELOG 的当期小节。仅发行仓（写了徽章）检查。
       if [ -n "$_badge_seen" ]; then
         _cl="$_root/CHANGELOG.md"
-        if [ -f "$_cl" ]; then
+        if [ ! -f "$_cl" ]; then
+          fail_msg "缺根 CHANGELOG.md（README 写了 keel 徽章 = 发行仓，副本一必须存在；§9.1-17）"
+        else
           grep -qE "^## ${_v} —" "$_cl" \
             || fail_msg "CHANGELOG.md 缺 ${_v} 小节（版本已声明 ${_v}，用户装不到/读不到这次变更；ADR 0010）"
         fi

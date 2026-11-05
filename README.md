@@ -80,7 +80,7 @@ cp .github/workflows/keel.yml /path/to/your-project/.github/workflows/
 # 4. 内核校验：必须 0 fail
 bash keel/checks/keel-lint.sh keel
 
-# 5. 自测：必须 60 项全过、0 失败（跳过单列，不计入通过）
+# 5. 自测：必须 62 项全过、0 失败（跳过单列，不计入通过）
 bash keel/checks/test-lint.sh
 ```
 
@@ -115,7 +115,7 @@ bash keel/checks/test-lint.sh
 ```bash
 # 日常三个
 bash keel/checks/keel-lint.sh keel        # 一致性校验：0 fail 才放行（pre-commit 与 CI 都跑它）
-bash keel/checks/test-lint.sh             # lint 自测：50 用例 + 4 元检查用例 + 6 元检查 + 脚本与文档一致性
+bash keel/checks/test-lint.sh             # lint 自测：52 用例 + 4 元检查用例 + 6 元检查 + 脚本与文档一致性
 bash keel/checks/test-lint.sh --only 6,39-41   # 只跑指定用例（改判据时用，秒级；发版前仍须全量）
 bash keel/checks/install-hooks.sh         # 装钩子（每人 clone 后跑一次，装完自动复核）
 
@@ -166,7 +166,7 @@ bash keel/checks/keel-lite.sh keel --apply   # 确认后执行；裁完自动跑
 
 | ① 锚点 | ② pre-commit | ③ commit-msg | ④ CI |
 |---|---|---|---|
-| 每次任务开始先读 INDEX + NOW | `keel/` 下 md 变更即跑 lint，0 fail 才放行 | message 里写 `pitfall: <文件名>` 自动给 `triggers` +1 | lint 0 fail + 自测 60 项 0 失败 |
+| 每次任务开始先读 INDEX + NOW | `keel/` 下 md 变更即跑 lint，0 fail 才放行 | message 里写 `pitfall: <文件名>` 自动给 `triggers` +1 | lint 0 fail + 自测 62 项 0 失败 |
 
 **缺一处，闭环就退化成自觉。** 所以②③也在检查面内：lint 第 16 项管"钩子本体在不在且可执行"（防误删），
 `verify-hooks.sh` 管"本地到底装没装"（`core.hooksPath`）——两者都失效才是真正没人知道的静默故障。

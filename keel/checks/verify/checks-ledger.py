@@ -344,7 +344,7 @@ def summary_of(ledger):
                      % "；".join("%s %s" % (a["id"], a["note"]) for a in aux_bad))
     counted = [m for m in ledger["meta"] if m["counted_in_selftest_total"]]
     lines.append("  - 元检查 %d 个：%d 个进自测分母（NOISE/INVOKE），%d 个进账本分母"
-                 "（§9.3-DOC/LOCALE/PROSE），%d 个暂无判死用例"
+                 "（§9.3-DOC/LOCALE/PROSE/SPEC），%d 个暂无判死用例"
                  % (len(ledger["meta"]), len(counted),
                     len([m for m in ledger["meta"] if m["id"].startswith("§9.3-")]),
                     len([m for m in ledger["meta"]

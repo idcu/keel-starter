@@ -258,6 +258,15 @@ def c25(d):
         write(os.path.join(d, "keel/checks/gen-%d.sh" % i), "#!/bin/sh\n")
 
 
+@case("51", "冷区 archive 超过 20 个文件不参与目录计数（§3.3 冷区只查死链）",
+      "§9.1-1", [], rc=0)
+def c51(d):
+    for i in range(21):
+        write(os.path.join(d, "keel/archive/gen-%d.md" % i),
+              "---\nscope: meta\nstatus: active\nlast-verified: 2026-01-01\n"
+              "keywords: [x]\n---\n正文\n")
+
+
 # ---------------- frontmatter（§9.1-2） ----------------
 @case("04", "frontmatter 超行数", "§9.1-2", ["frontmatter 超行数"])
 def c04(d):
@@ -428,6 +437,13 @@ def c20(d):
 @case("36", "缺闭环钩子本体（§10.4 铁律：缺一，闭环不成立）", "§9.1-16", ["缺闭环钩子本体"])
 def c36(d):
     os.remove(os.path.join(d, "keel/checks/hooks/commit-msg"))
+
+
+@case("52", "写了徽章却缺根 CHANGELOG 副本（静默跳过 = 假绿）",
+      "§9.1-17", ["缺根 CHANGELOG"])
+def c52(d):
+    write(os.path.join(d, "README.md"),
+          "# 项目\n\n[![keel-version](https://img.shields.io/badge/keel--version-2.1.0-000000)](keel/INDEX.md)\n")
 
 
 # ---------------- 版本副本一致（§9.1-17） ----------------
